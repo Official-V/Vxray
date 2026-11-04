@@ -75,6 +75,10 @@ Var UpdateMode
 Var NoShortcutMode
 Var WixMode
 Var OldMainBinaryName
+; The major and minor halves of the version, split at install time so the string
+; written to Programs & Features matches the two-part number the app shows.
+Var DisplayMajor
+Var DisplayMinor
 
 Name "${PRODUCTNAME}"
 BrandingText "${COPYRIGHT}"
@@ -473,8 +477,29 @@ Section Install
 
   ; Silently kill processes to prevent locking files
   nsExec::Exec "taskkill /F /IM vxray-rust.exe /T"
+  nsExec::Exec "taskkill /F /IM vxray-core.exe /T"
   nsExec::Exec "taskkill /F /IM sing-box.exe /T"
   nsExec::Exec "taskkill /F /IM xray.exe /T"
+  ; Cores from the previous build ran under the names below. An in-place upgrade would
+  ; otherwise leave the old TUN core alive and holding the "Vxray" adapter, which the
+  ; new one then fails to claim.
+  nsExec::Exec "taskkill /F /IM vxray-tun.exe /T"
+  nsExec::Exec "taskkill /F /IM stat-tracker.exe /T"
+  ; Clean up any orphaned Wintun/sing-tun ghost devices so the TUN adapter can bind cleanly
+  nsExec::Exec 'powershell -NoProfile -NonInteractive -Command "Get-PnpDevice -ErrorAction SilentlyContinue | Where-Object { ($_.InstanceId -like \"SWD\WINTUN\*\" -or $_.FriendlyName -like \"*sing-tun*\" -or $_.FriendlyName -like \"*wintun*\") -and $_.Status -ne \"OK\" } | ForEach-Object { pnputil /remove-device $_.InstanceId } ; Get-NetAdapter -IncludeHidden -ErrorAction SilentlyContinue | Where-Object { (($_.Name -like \"Local Area Connection*\" -and ($_.InterfaceDescription -like \"*Wintun*\" -or $_.InterfaceDescription -like \"*sing-tun*\")) -or ($_.Name -eq \"Vxray\")) -and $_.Status -ne \"Up\" } | Remove-NetAdapter -Confirm:$false"'
+
+  ; The force-kill above gives the app no chance to run its own teardown, so a session that was
+  ; connected goes down with ProxyEnable still pointing at a port nothing will ever answer on.
+  ; Only the value Vxray itself writes is cleared -- a proxy the user configured by hand, or one
+  ; another application installed, is not ours to remove. An in-app update already clears this
+  ; before spawning setup.exe, in which case the comparison simply does not fire.
+  ReadRegStr $0 HKCU "Software\Microsoft\Windows\CurrentVersion\Internet Settings" "ProxyServer"
+  ${If} $0 == "127.0.0.1:2080"
+    DeleteRegValue HKCU "Software\Microsoft\Windows\CurrentVersion\Internet Settings" "ProxyServer"
+    DeleteRegValue HKCU "Software\Microsoft\Windows\CurrentVersion\Internet Settings" "ProxyOverride"
+    DeleteRegValue HKCU "Software\Microsoft\Windows\CurrentVersion\Internet Settings" "AutoConfigURL"
+    WriteRegDWORD HKCU "Software\Microsoft\Windows\CurrentVersion\Internet Settings" "ProxyEnable" 0
+  ${EndIf}
 
   !insertmacro CheckIfAppIsRunning "${MAINBINARYNAME}.exe" "${PRODUCTNAME}"
 
@@ -488,6 +513,10 @@ Section Install
   {{#each resources}}
     File /a "/oname={{this.[1]}}" "{{no-escape @key}}"
   {{/each}}
+
+  ; Populate $INSTDIR\bin directly from resources as well
+  CreateDirectory "$INSTDIR\bin"
+  CopyFiles /SILENT "$INSTDIR\_up_\bin\*.*" "$INSTDIR\bin"
 
   ; Copy external binaries
   {{#each binaries}}
@@ -534,7 +563,14 @@ Section Install
   ; Registry information for add/remove programs
   WriteRegStr SHCTX "${UNINSTKEY}" "DisplayName" "${PRODUCTNAME}"
   WriteRegStr SHCTX "${UNINSTKEY}" "DisplayIcon" "$\"$INSTDIR\${MAINBINARYNAME}.exe$\""
-  WriteRegStr SHCTX "${UNINSTKEY}" "DisplayVersion" "${VERSION}"
+  ; Cargo and Tauri make the manifests carry a third part because they require semver,
+  ; but the release is numbered "2.1". Emitting the raw ${VERSION} here would put
+  ; "2.1.0" in Programs & Features while the app's About page says "2.1". Splitting the
+  ; first two fields is the NSIS twin of Rust's display_version, so the two agree
+  ; without hardcoding the number in a second place.
+  ${WordFind} "${VERSION}" "." "+1" $DisplayMajor
+  ${WordFind} "${VERSION}" "." "+2" $DisplayMinor
+  WriteRegStr SHCTX "${UNINSTKEY}" "DisplayVersion" "$DisplayMajor.$DisplayMinor"
   WriteRegStr SHCTX "${UNINSTKEY}" "Publisher" "${MANUFACTURER}"
   WriteRegStr SHCTX "${UNINSTKEY}" "InstallLocation" "$\"$INSTDIR$\""
   WriteRegStr SHCTX "${UNINSTKEY}" "UninstallString" "$\"$INSTDIR\uninstall.exe$\""
@@ -615,8 +651,26 @@ Section Uninstall
 
   ; Silently kill processes to prevent locking files
   nsExec::Exec "taskkill /F /IM vxray-rust.exe /T"
+  nsExec::Exec "taskkill /F /IM vxray-core.exe /T"
   nsExec::Exec "taskkill /F /IM sing-box.exe /T"
   nsExec::Exec "taskkill /F /IM xray.exe /T"
+  nsExec::Exec "taskkill /F /IM vxray-tun.exe /T"
+  nsExec::Exec "taskkill /F /IM stat-tracker.exe /T"
+  ; Clean up any orphaned Wintun/sing-tun ghost devices
+  nsExec::Exec 'powershell -NoProfile -NonInteractive -Command "Get-PnpDevice -ErrorAction SilentlyContinue | Where-Object { ($_.InstanceId -like \"SWD\WINTUN\*\" -or $_.FriendlyName -like \"*sing-tun*\" -or $_.FriendlyName -like \"*wintun*\") -and $_.Status -ne \"OK\" } | ForEach-Object { pnputil /remove-device $_.InstanceId } ; Get-NetAdapter -IncludeHidden -ErrorAction SilentlyContinue | Where-Object { (($_.Name -like \"Local Area Connection*\" -and ($_.InterfaceDescription -like \"*Wintun*\" -or $_.InterfaceDescription -like \"*sing-tun*\")) -or ($_.Name -eq \"Vxray\")) -and $_.Status -ne \"Up\" } | Remove-NetAdapter -Confirm:$false"'
+
+  ; Uninstalling is the one path with no recovery: the force-kill above skips the app's own
+  ; teardown, so a connected session leaves ProxyEnable aimed at 127.0.0.1:2080 and the only
+  ; tool able to clear it is the one being removed. A user who uninstalls precisely because a
+  ; crash left their proxy stranded is then stranded permanently. Only Vxray's own value is
+  ; cleared, so a proxy configured by hand or by another application survives the uninstall.
+  ReadRegStr $0 HKCU "Software\Microsoft\Windows\CurrentVersion\Internet Settings" "ProxyServer"
+  ${If} $0 == "127.0.0.1:2080"
+    DeleteRegValue HKCU "Software\Microsoft\Windows\CurrentVersion\Internet Settings" "ProxyServer"
+    DeleteRegValue HKCU "Software\Microsoft\Windows\CurrentVersion\Internet Settings" "ProxyOverride"
+    DeleteRegValue HKCU "Software\Microsoft\Windows\CurrentVersion\Internet Settings" "AutoConfigURL"
+    WriteRegDWORD HKCU "Software\Microsoft\Windows\CurrentVersion\Internet Settings" "ProxyEnable" 0
+  ${EndIf}
 
   !insertmacro CheckIfAppIsRunning "${MAINBINARYNAME}.exe" "${PRODUCTNAME}"
 
@@ -628,6 +682,7 @@ Section Uninstall
   {{#each resources}}
     Delete "$INSTDIR\\{{this.[1]}}"
   {{/each}}
+  RMDir /r "$INSTDIR\bin"
 
   ; Delete external binaries
   {{#each binaries}}

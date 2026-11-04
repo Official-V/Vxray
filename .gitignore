@@ -29,3 +29,15 @@ test_*.exe
 
 # Logs
 *.log
+
+# Release installers & outputs
+releases/
+*.zip
+
+# Linux & staging binaries (auto-downloaded on demand in CI/CD)
+bin-linux/
+bin-x86/
+bin-windows-backup/
+
+# Backups
+verified-backup*/

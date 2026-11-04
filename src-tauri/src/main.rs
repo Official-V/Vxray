@@ -5,6 +5,7 @@ mod core;
 
 use core::manager::CoreManager;
 use core::settings::SettingsManager;
+#[cfg(windows)]
 use std::os::windows::process::CommandExt;
 use std::sync::Mutex;
 use tauri::{
@@ -76,26 +77,29 @@ fn main() {
         // and release its `single_instance` lock.
         std::thread::sleep(std::time::Duration::from_millis(500));
         
-        let exe = std::env::current_exe().unwrap_or_default();
-        use std::os::windows::ffi::OsStrExt;
-        let exe_wide: Vec<u16> = exe.as_os_str().encode_wide().chain(std::iter::once(0)).collect();
-        let verb: Vec<u16> = std::ffi::OsStr::new("runas").encode_wide().chain(std::iter::once(0)).collect();
-        
-        unsafe {
-            // Must initialize COM for ShellExecuteW
-            let _ = windows_sys::Win32::System::Com::CoInitializeEx(
-                std::ptr::null(),
-                (windows_sys::Win32::System::Com::COINIT_APARTMENTTHREADED | windows_sys::Win32::System::Com::COINIT_DISABLE_OLE1DDE) as u32
-            );
+        #[cfg(windows)]
+        {
+            let exe = std::env::current_exe().unwrap_or_default();
+            use std::os::windows::ffi::OsStrExt;
+            let exe_wide: Vec<u16> = exe.as_os_str().encode_wide().chain(std::iter::once(0)).collect();
+            let verb: Vec<u16> = std::ffi::OsStr::new("runas").encode_wide().chain(std::iter::once(0)).collect();
+            
+            unsafe {
+                // Must initialize COM for ShellExecuteW
+                let _ = windows_sys::Win32::System::Com::CoInitializeEx(
+                    std::ptr::null(),
+                    (windows_sys::Win32::System::Com::COINIT_APARTMENTTHREADED | windows_sys::Win32::System::Com::COINIT_DISABLE_OLE1DDE) as u32
+                );
 
-            windows_sys::Win32::UI::Shell::ShellExecuteW(
-                0 as isize,
-                verb.as_ptr(),
-                exe_wide.as_ptr(),
-                std::ptr::null(),
-                std::ptr::null(),
-                windows_sys::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL as i32,
-            );
+                windows_sys::Win32::UI::Shell::ShellExecuteW(
+                    0 as isize,
+                    verb.as_ptr(),
+                    exe_wide.as_ptr(),
+                    std::ptr::null(),
+                    std::ptr::null(),
+                    windows_sys::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL as i32,
+                );
+            }
         }
         std::process::exit(0);
     }
@@ -105,41 +109,44 @@ fn main() {
     let core_manager = CoreManager::new();
     let settings_manager = SettingsManager::new();
 
+    #[cfg(windows)]
     // Sync autostart registry key on manual startup to repair any profile desyncs
-    let is_autostart_launch = std::env::args().any(|arg| arg == "--autostart");
-    if !is_autostart_launch {
-        let task_name = "VxrayAutoStart";
-        if settings_manager.settings.ui.auto_start {
-            let exe_path = std::env::current_exe().unwrap_or_default();
-            let exe_str = format!("\"{}\" --autostart", exe_path.to_string_lossy());
-            if let Ok(hkcu) = winreg::RegKey::predef(winreg::enums::HKEY_CURRENT_USER)
-                .open_subkey_with_flags(
-                    r"Software\Microsoft\Windows\CurrentVersion\Run",
-                    winreg::enums::KEY_SET_VALUE,
-                )
-            {
-                let _ = hkcu.set_value("Vxray", &exe_str);
+    {
+        let is_autostart_launch = std::env::args().any(|arg| arg == "--autostart");
+        if !is_autostart_launch {
+            let task_name = "VxrayAutoStart";
+            if settings_manager.settings.ui.auto_start {
+                let exe_path = std::env::current_exe().unwrap_or_default();
+                let exe_str = format!("\"{}\" --autostart", exe_path.to_string_lossy());
+                if let Ok(hkcu) = winreg::RegKey::predef(winreg::enums::HKEY_CURRENT_USER)
+                    .open_subkey_with_flags(
+                        r"Software\Microsoft\Windows\CurrentVersion\Run",
+                        winreg::enums::KEY_SET_VALUE,
+                    )
+                {
+                    let _ = hkcu.set_value("Vxray", &exe_str);
+                }
+                let _ = std::process::Command::new("schtasks")
+                    .args(&[
+                        "/Create", "/F", "/TN", task_name, "/TR", &exe_str, "/SC", "ONLOGON", "/RL",
+                        "HIGHEST",
+                    ])
+                    .creation_flags(0x08000000)
+                    .output();
+            } else {
+                if let Ok(hkcu) = winreg::RegKey::predef(winreg::enums::HKEY_CURRENT_USER)
+                    .open_subkey_with_flags(
+                        r"Software\Microsoft\Windows\CurrentVersion\Run",
+                        winreg::enums::KEY_SET_VALUE,
+                    )
+                {
+                    let _ = hkcu.delete_value("Vxray");
+                }
+                let _ = std::process::Command::new("schtasks")
+                    .args(&["/Delete", "/F", "/TN", task_name])
+                    .creation_flags(0x08000000)
+                    .output();
             }
-            let _ = std::process::Command::new("schtasks")
-                .args(&[
-                    "/Create", "/F", "/TN", task_name, "/TR", &exe_str, "/SC", "ONLOGON", "/RL",
-                    "HIGHEST",
-                ])
-                .creation_flags(0x08000000)
-                .output();
-        } else {
-            if let Ok(hkcu) = winreg::RegKey::predef(winreg::enums::HKEY_CURRENT_USER)
-                .open_subkey_with_flags(
-                    r"Software\Microsoft\Windows\CurrentVersion\Run",
-                    winreg::enums::KEY_SET_VALUE,
-                )
-            {
-                let _ = hkcu.delete_value("Vxray");
-            }
-            let _ = std::process::Command::new("schtasks")
-                .args(&["/Delete", "/F", "/TN", task_name])
-                .creation_flags(0x08000000)
-                .output();
         }
     }
 
@@ -335,7 +342,25 @@ fn main() {
             commands::copy_to_clipboard,
             commands::read_from_clipboard,
             commands::clear_manual_servers
-        ])
+        ,
+            commands::get_dns_settings,
+            commands::set_theme,
+            commands::set_language,
+            commands::get_language,
+            commands::browse_executable,
+            commands::detect_installed_apps,
+            commands::cached_installed_apps,
+            commands::process_rule_status,
+            commands::xray_configs_to_links,
+            commands::revive_tun,
+            commands::test_all_tcp_ping,
+            crate::core::update::check_for_updates,
+            crate::core::update::get_release_notes,
+            crate::core::update::download_update,
+            crate::core::update::install_update,
+            crate::core::update::get_system_info,
+            crate::core::update::get_app_version,
+            crate::core::update::open_external_url])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

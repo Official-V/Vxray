@@ -1,10 +1,13 @@
 {
   "name": "vxray-rust",
-  "version": "2.0.1",
+  "version": "2.1.0",
   "description": "Vxray written in Rust and Tauri",
   "scripts": {
     "dev": "tauri dev",
-    "build": "tauri build"
+    "build": "tauri build",
+    "build:32": "node build-32bit.js",
+    "build:linux": "node build-linux.js",
+    "postbuild": "node rename-installer.js"
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2.0.0"

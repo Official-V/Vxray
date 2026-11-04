@@ -1427,11 +1427,31 @@ pub fn build_singbox_routing_rules(settings: &crate::core::settings::Settings) -
         let outbound = match rule.action.as_str() {
             "bypass" | "direct" => "direct",
             "block" => "block",
+            "proxy" => "proxy",
             _ => continue,
         };
 
         let pattern = rule.pattern.trim();
         if pattern.is_empty() {
+            continue;
+        }
+
+        // Process rules (per-app split tunneling) use sing-box's process_name matcher.
+        // The pattern is an .exe path; sing-box matches on the bare image name only.
+        if rule.kind == "process" {
+            let image_name = std::path::Path::new(pattern)
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or(pattern);
+            let mut names = vec![image_name.to_string()];
+            let lower = image_name.to_lowercase();
+            if lower != image_name {
+                names.push(lower);
+            }
+            rules.push(json!({
+                "process_name": names,
+                "outbound": outbound
+            }));
             continue;
         }
 
@@ -1455,16 +1475,6 @@ pub fn build_singbox_routing_rules(settings: &crate::core::settings::Settings) -
 /// Build routing rules for Xray format from user settings
 pub fn build_xray_routing_rules(settings: &crate::core::settings::Settings) -> Vec<Value> {
     let mut rules = vec![];
-
-    // Bypass Windows NCSI
-    rules.push(json!({
-        "type": "field",
-        "domain": [
-            "msftconnecttest.com",
-            "msftncsi.com"
-        ],
-        "outboundTag": "direct"
-    }));
 
     // Bypass LAN
     if settings.bypass_lan {
@@ -1522,9 +1532,18 @@ pub fn build_xray_routing_rules(settings: &crate::core::settings::Settings) -> V
         if !rule.enabled {
             continue;
         }
+
+        // Xray-core does not support process-name routing; process rules are handled
+        // exclusively by the sing-box TUN sidecar. Emitting an exe name as a domain
+        // rule would silently do nothing, so skip them cleanly.
+        if rule.kind == "process" {
+            continue;
+        }
+
         let outbound_tag = match rule.action.as_str() {
             "bypass" | "direct" => "direct",
             "block" => "block",
+            "proxy" => "proxy",
             _ => continue,
         };
 
@@ -1551,24 +1570,135 @@ pub fn build_xray_routing_rules(settings: &crate::core::settings::Settings) -> V
     rules
 }
 
+pub fn tracker_config(port: u16) -> Value {
+    json!({
+        "log": { "level": "fatal" },
+        "experimental": {
+            "clash_api": {
+                "external_controller": "127.0.0.1:9090"
+            }
+        },
+        "inbounds": [{
+            "type": "mixed",
+            "tag": "mixed-in",
+            "listen": "127.0.0.1",
+            "listen_port": port,
+            "sniff": true,
+            "sniff_override_destination": true
+        }],
+        "outbounds": [{
+            "type": "socks",
+            "tag": "proxy",
+            "server": "127.0.0.1",
+            "server_port": port + 1,
+            "version": "5"
+        }],
+        "route": {
+            "final": "proxy"
+        }
+    })
+}
+
+pub fn link_transport_requires_xray(proxy: &Value) -> bool {
+    // 1. VLESS post-quantum or custom encryption (e.g. mlkem768x25519plus...) is Xray-only
+    if let Some(enc) = proxy.get("encryption").and_then(|e| e.as_str()) {
+        if !enc.is_empty() && enc != "none" {
+            return true;
+        }
+    }
+    // 2. Transports exclusive to Xray
+    if let Some(transport) = proxy.get("transport") {
+        let t_type = transport.get("type").and_then(|t| t.as_str()).unwrap_or("");
+        let h_type = transport.get("header_type").and_then(|h| h.as_str()).unwrap_or("");
+        if t_type == "xhttp" || t_type == "splithttp" || h_type == "http" {
+            return true;
+        }
+    }
+    false
+}
+
+pub fn process_rule_conflict(
+    _rules: &[crate::core::settings::RoutingRule],
+    _link: &str,
+    _tun_mode: bool,
+) -> Option<String> {
+    None
+}
+
+pub fn xray_config_to_link(config: &Value) -> Option<String> {
+    let remark = config.get("remarks").and_then(|r| r.as_str()).unwrap_or("");
+    let outbounds = config.get("outbounds").and_then(|o| o.as_array())?;
+    let proxy = outbounds.iter().find(|o| {
+        let tag = o.get("tag").and_then(|t| t.as_str()).unwrap_or("");
+        let proto = o.get("protocol").and_then(|p| p.as_str()).unwrap_or("");
+        tag == "proxy" || (proto != "freedom" && proto != "blackhole" && proto != "direct" && proto != "block")
+    })?;
+
+    let proto = proxy.get("protocol").and_then(|p| p.as_str())?;
+    let settings = proxy.get("settings")?;
+    let stream = proxy.get("streamSettings");
+
+    let fragment = if remark.is_empty() { String::new() } else { format!("#{}", urlencoding::encode(remark)) };
+
+    match proto {
+        "trojan" => {
+            let servers = settings.get("servers")?.as_array()?;
+            let server = servers.first()?;
+            let addr = server.get("address")?.as_str()?;
+            let port = server.get("port")?.as_u64()?;
+            let users = server.get("users")?.as_array()?;
+            let password = users.first()?.get("password")?.as_str()?;
+
+            let mut query = vec![];
+            if let Some(stream) = stream {
+                if let Some(net) = stream.get("network").and_then(|n| n.as_str()) {
+                    query.push(format!("type={}", net));
+                }
+                if let Some(sec) = stream.get("security").and_then(|s| s.as_str()) {
+                    query.push(format!("security={}", sec));
+                }
+                if let Some(tls) = stream.get("tlsSettings") {
+                    if let Some(sni) = tls.get("serverName").and_then(|s| s.as_str()) {
+                        query.push(format!("sni={}", sni));
+                    }
+                }
+                if let Some(ws) = stream.get("wsSettings") {
+                    if let Some(p) = ws.get("path").and_then(|s| s.as_str()) {
+                        query.push(format!("path={}", urlencoding::encode(p)));
+                    }
+                    if let Some(h) = ws.get("host").and_then(|s| s.as_str()) {
+                        query.push(format!("host={}", urlencoding::encode(h)));
+                    }
+                }
+            }
+            let q_str = if query.is_empty() { String::new() } else { format!("?{}", query.join("&")) };
+            Some(format!("trojan://{}@{}:{}{}{}", password, addr, port, q_str, fragment))
+        }
+        "shadowsocks" => {
+            use base64::Engine;
+            let servers = settings.get("servers")?.as_array()?;
+            let server = servers.first()?;
+            let addr = server.get("address")?.as_str()?;
+            let port = server.get("port")?.as_u64()?;
+            let method = server.get("method")?.as_str()?;
+            let password = server.get("password")?.as_str()?;
+            let user_info = format!("{}:{}", method, password);
+            let b64 = base64::engine::general_purpose::STANDARD.encode(user_info.as_bytes());
+            Some(format!("ss://{}@{}:{}{}", b64, addr, port, fragment))
+        }
+        _ => None,
+    }
+}
+
 pub fn generate_config(
     link: &str,
     port: u16,
     settings: Option<&crate::core::settings::Settings>,
+    tun_mode: bool,
 ) -> Result<(Value, Option<String>, bool), String> {
     let parsed_proxy = parse_link(link).ok_or_else(|| "Invalid or unsupported proxy link".to_string())?;
 
-    let mut use_xray = false;
-    if let Some(transport) = parsed_proxy.get("transport") {
-        let t_type = transport.get("type").and_then(|t| t.as_str()).unwrap_or("");
-        let h_type = transport
-            .get("header_type")
-            .and_then(|h| h.as_str())
-            .unwrap_or("");
-        if t_type == "xhttp" || h_type == "http" {
-            use_xray = true;
-        }
-    }
+    let mut use_xray = link_transport_requires_xray(&parsed_proxy);
 
     if let Some(s) = settings {
         if s.core_choice == "xray" {
@@ -1577,7 +1707,7 @@ pub fn generate_config(
     }
 
     if use_xray {
-        if let Some((mut cfg, ip)) = generate_xray_config(link, port, settings) {
+        if let Some((mut cfg, ip)) = generate_xray_config(link, port, settings, tun_mode) {
             cfg["__core__"] = json!("xray");
             return Ok((cfg, Some(ip), true));
         }
@@ -1587,6 +1717,29 @@ pub fn generate_config(
 
     proxy["tag"] = json!("proxy");
     let mut rules = vec![json!({"protocol": "dns", "outbound": "dns-out"})];
+
+    let is_proxy_only_sys = !tun_mode && settings.map_or(false, |s| s.proxy_only_mode);
+
+    if is_proxy_only_sys {
+        rules.push(json!({
+            "domain_suffix": [
+                "ip-api.com",
+                "ipwho.is",
+                "freeipapi.com",
+                "myip.com",
+                "ipify.org",
+                "cp.cloudflare.com"
+            ],
+            "outbound": "proxy"
+        }));
+        rules.push(json!({
+            "ip_cidr": [
+                "1.1.1.1/32",
+                "1.0.0.1/32"
+            ],
+            "outbound": "proxy"
+        }));
+    }
 
     // Inject user routing rules (bypass iran, bypass lan, block ads, custom rules)
     if let Some(s) = settings {
@@ -1642,7 +1795,7 @@ pub fn generate_config(
             },
             "dns": {
                 "servers": [
-                    {"tag": "dns_remote", "address": sb_remote, "detour": "proxy"},
+                    {"tag": "dns_remote", "address": sb_remote, "address_resolver": "dns_local", "detour": "proxy"},
                     {"tag": "dns_local", "address": sb_local, "detour": "direct"}
                 ],
                 "rules": dns_rules,
@@ -1668,7 +1821,7 @@ pub fn generate_config(
             "route": {
                 "rules": rules,
                 "auto_detect_interface": true,
-                "final": "proxy"
+                "final": if is_proxy_only_sys { "direct" } else { "proxy" }
             }
         }),
         proxy_ip,
@@ -1720,7 +1873,11 @@ pub fn generate_tun_config(
             "process_name": [
                 "xray.exe",
                 "sing-box.exe",
-                "stat-tracker.exe"
+                "stat-tracker.exe",
+                "vxray-tun.exe",
+                "vx-sing-box.exe",
+                "vx-xray.exe",
+                "vx-stat-tracker.exe"
             ],
             "outbound": "direct"
         }),
@@ -1768,16 +1925,28 @@ pub fn generate_tun_config(
         route_rules.push(json!({"domain": [domain.clone()], "outbound": "direct"}));
     }
 
-    // Bypass Windows NCSI domains to prevent "No internet access" on restricted proxies
-    route_rules.push(json!({
-        "domain_suffix": [
-            "msftconnecttest.com",
-            "msftncsi.com"
-        ],
-        "outbound": "direct"
-    }));
-
     if let Some(s) = settings {
+        if s.proxy_only_mode {
+            // Health-check endpoints so dashboard detects proxy IP and live ping
+            route_rules.push(json!({
+                "domain_suffix": [
+                    "ip-api.com",
+                    "ipwho.is",
+                    "freeipapi.com",
+                    "myip.com",
+                    "ipify.org",
+                    "cp.cloudflare.com"
+                ],
+                "outbound": "proxy"
+            }));
+            route_rules.push(json!({
+                "ip_cidr": [
+                    "1.1.1.1/32",
+                    "1.0.0.1/32"
+                ],
+                "outbound": "proxy"
+            }));
+        }
         route_rules.extend(build_singbox_routing_rules(s));
     }
 
@@ -1813,13 +1982,15 @@ pub fn generate_tun_config(
             }
         }
     }
-    dns_rules.push(json!({
-        "domain_suffix": [
-            "msftconnecttest.com",
-            "msftncsi.com"
-        ],
-        "server": "dns-ncsi"
-    }));
+    if let Some(s) = settings {
+        if s.bypass_iran {
+            let domains: Vec<String> = iran_domains().iter().map(|d| d.to_string()).collect();
+            dns_rules.push(json!({
+                "domain_suffix": domains,
+                "server": "dns-direct"
+            }));
+        }
+    }
     dns_rules.push(json!({"outbound": ["direct", "block"], "server": "dns-direct"}));
 
     let mut config = json!({
@@ -1829,9 +2000,8 @@ pub fn generate_tun_config(
         },
         "dns": {
             "servers": [
-                {"tag": "dns-remote", "address": if remote_dns.is_empty() { "1.1.1.1" } else { &remote_dns }, "detour": "proxy"},
-                {"tag": "dns-direct", "address": if local_dns.is_empty() { "local" } else { &local_dns }, "detour": "direct"},
-                {"tag": "dns-ncsi", "address": "8.8.8.8", "detour": "direct"}
+                {"tag": "dns-remote", "address": if remote_dns.is_empty() { "1.1.1.1" } else { &remote_dns }, "address_resolver": "dns-direct", "detour": "proxy"},
+                {"tag": "dns-direct", "address": if local_dns.is_empty() { "local" } else { &local_dns }, "detour": "direct"}
             ],
             "rules": dns_rules,
             "final": "dns-remote",
@@ -1853,7 +2023,7 @@ pub fn generate_tun_config(
         "route": {
             "rules": route_rules,
             "auto_detect_interface": true,
-            "final": "proxy"
+            "final": if settings.map_or(false, |s| s.proxy_only_mode) { "direct" } else { "proxy" }
         }
     });
 
@@ -1908,16 +2078,10 @@ pub fn generate_mass_test_config(links: Vec<String>, start_port: u16) -> Value {
 
 pub fn generate_single_test_config(link: &str, port: u16) -> Value {
     if let Some(parsed) = parse_link(link) {
-        if let Some(transport) = parsed.get("transport") {
-            let t_type = transport.get("type").and_then(|t| t.as_str()).unwrap_or("");
-            let h_type = transport
-                .get("header_type")
-                .and_then(|h| h.as_str())
-                .unwrap_or("");
-            if t_type == "xhttp" || h_type == "http" {
-                if let Some((cfg, _)) = generate_xray_config(link, port, None) {
-                    return cfg;
-                }
+        if link_transport_requires_xray(&parsed) {
+            if let Some((mut cfg, _)) = generate_xray_config(link, port, None, false) {
+                cfg["__core__"] = json!("xray");
+                return cfg;
             }
         }
     }
@@ -1927,6 +2091,7 @@ pub fn generate_xray_config(
     link: &str,
     port: u16,
     settings: Option<&crate::core::settings::Settings>,
+    tun_mode: bool,
 ) -> Option<(Value, String)> {
     let sb = parse_link(link)?;
 
@@ -2130,18 +2295,56 @@ pub fn generate_xray_config(
         })
     };
 
-    let mut outbounds = vec![
-        json!({
-            "tag": "proxy",
-            "protocol": protocol,
-            "settings": outbound_settings,
-            "streamSettings": stream_settings
-        }),
-        json!({"protocol": "freedom", "tag": "direct"}),
-        json!({"protocol": "blackhole", "tag": "block"}),
-    ];
+    let is_proxy_only_sys = !tun_mode && settings.map_or(false, |s| s.proxy_only_mode);
+
+    let mut outbounds = if is_proxy_only_sys {
+        vec![
+            json!({"protocol": "freedom", "tag": "direct"}),
+            json!({
+                "tag": "proxy",
+                "protocol": protocol,
+                "settings": outbound_settings,
+                "streamSettings": stream_settings
+            }),
+            json!({"protocol": "blackhole", "tag": "block"}),
+        ]
+    } else {
+        vec![
+            json!({
+                "tag": "proxy",
+                "protocol": protocol,
+                "settings": outbound_settings,
+                "streamSettings": stream_settings
+            }),
+            json!({"protocol": "freedom", "tag": "direct"}),
+            json!({"protocol": "blackhole", "tag": "block"}),
+        ]
+    };
 
     let mut rules: Vec<Value> = vec![];
+
+    if is_proxy_only_sys {
+        rules.push(json!({
+            "type": "field",
+            "domain": [
+                "domain:ip-api.com",
+                "domain:ipwho.is",
+                "domain:freeipapi.com",
+                "domain:myip.com",
+                "domain:ipify.org",
+                "domain:cp.cloudflare.com"
+            ],
+            "outboundTag": "proxy"
+        }));
+        rules.push(json!({
+            "type": "field",
+            "ip": [
+                "1.1.1.1/32",
+                "1.0.0.1/32"
+            ],
+            "outboundTag": "proxy"
+        }));
+    }
 
     // Inject user routing rules (bypass iran, bypass lan, block ads, custom rules)
     if let Some(s) = settings {

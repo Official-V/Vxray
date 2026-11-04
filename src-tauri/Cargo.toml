@@ -1,6 +1,6 @@
 [package]
 name = "vxray-rust"
-version = "2.0.1"
+version = "2.1.0"
 description = "Vxray written in Rust and Tauri"
 authors = ["you"]
 edition = "2021"
@@ -15,28 +15,44 @@ tauri = { version = "2.0.0", features = ["tray-icon", "devtools"] }
 tauri-plugin-shell = "2.0.0"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
-reqwest = { version = "0.12", features = ["json", "socks"] }
+reqwest = { version = "0.12", features = ["json", "socks", "stream"] }
 tokio = { version = "1", features = ["full"] }
 url = "2.5"
 base64 = "0.22"
 regex = "1.10"
-winreg = "0.52"
 urlencoding = "2.1.3"
 dirs = "6.0.0"
 tauri-plugin-single-instance = "2.4.3"
 tauri-plugin-autostart = "2.5.1"
 once_cell = "1.21.4"
+futures-util = "0.3"
 arboard = "3.6.1"
 percent-encoding = "2.3.2"
 os_pipe = "1.2.3"
 
-[dependencies.windows-sys]
+[target.'cfg(windows)'.dependencies]
+winreg = "0.52"
+
+[target.'cfg(windows)'.dependencies.windows-sys]
 version = "0.52"
 features = [
     "Win32_Networking_WinInet", "Win32_System_Com",
-    "Win32_UI_Shell",
+    "Win32_UI_Shell", "Win32_UI_Controls_Dialogs",
     "Win32_UI_WindowsAndMessaging",
     "Win32_Foundation", "Win32_System_JobObjects", "Win32_System_Threading", "Win32_Security",
+    # The PropertiesSystem sub-namespace owns SHGetPropertyStoreForWindow, which is how the
+    # AppUserModelID property is written onto a window.
+    "Win32_UI_Shell_PropertiesSystem",
+    # WNDCLASSEXW, needed to create a scratch window in the AppUserModelID test.
+    "Win32_Graphics_Gdi",
+    # GetIfTable2 / GetIpForwardTable2 -- the only way to ask whether the "Vxray" Wintun adapter is
+    # actually installed and carrying a route. The TUN readiness gates used to ask the sidecar
+    # process instead, which reports the spawn and nothing about the adapter. The row structs these
+    # return are gated on Ndis, and the forward table's address family on WinSock, so both come
+    # along even though only IpHelper is named in the call.
+    "Win32_NetworkManagement_IpHelper",
+    "Win32_NetworkManagement_Ndis",
+    "Win32_Networking_WinSock",
 ]
 
 [profile.release]

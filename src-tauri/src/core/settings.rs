@@ -13,6 +13,10 @@ pub struct ServerStats {
     pub ping_history: Vec<u64>,
     #[serde(default)]
     pub total_used: u64,
+    // The traffic stream reports up and down separately; total_used folds them together, so this
+    // is the half that used to be discarded at the single call site that reads it.
+    #[serde(default)]
+    pub total_upload: u64,
 }
 
 #[derive(Clone, Serialize, Deserialize, Debug)]
@@ -39,17 +43,35 @@ fn default_true() -> bool {
     true
 }
 
+fn default_rule_kind() -> String {
+    "domain".to_string()
+}
+
 #[derive(Clone, Serialize, Deserialize, Debug)]
 pub struct RoutingRule {
+    // One malformed entry in the array used to fail the whole Settings parse, which resets
+    // everything above to defaults -- subscriptions included -- on the next launch. Defaulting
+    // the three keys drops only the broken row.
+    #[serde(default)]
     pub id: String,
+    #[serde(default)]
     pub pattern: String,
+    #[serde(default)]
     pub action: String, // "direct", "block", "proxy"
+    /// "domain" or "process". A process rule matches sing-box's `process_name`, i.e.
+    /// split tunneling per .exe; a domain rule is the ordinary domain/IP kind. The
+    /// default keeps settings.json written before this field existed loading as domain
+    /// rules, which is what every such rule actually was.
+    #[serde(default = "default_rule_kind")]
+    pub kind: String,
     #[serde(default = "default_true")]
     pub enabled: bool,
 }
 
+// Google DoH, not Cloudflare: 1.1.1.1 is intercepted by Iranian ISPs (see
+// config::sanitize_remote_dns) so it must never be the shipped default.
 fn default_remote_dns() -> String {
-    "https://1.1.1.1/dns-query".to_string()
+    "https://8.8.8.8/dns-query".to_string()
 }
 
 fn default_local_dns() -> String {
@@ -60,10 +82,23 @@ fn default_core() -> String {
     "auto".to_string()
 }
 
+fn default_language() -> String {
+    "en".to_string()
+}
+
+// The stylesheet keys the whole palette off html[data-theme], so the persisted value is
+// just that attribute. Anything stored before the toggle existed has no field and lands
+// here on "dark", which is what the app already looked like.
+fn default_theme() -> String {
+    "dark".to_string()
+}
+
 #[derive(Clone, Serialize, Deserialize, Debug)]
 pub struct UiState {
     pub last_selected: Option<String>,
     pub tun_enabled: bool,
+    #[serde(default = "default_language")]
+    pub language: String,
     #[serde(default)]
     pub auto_reconnect: bool,
     #[serde(default)]
@@ -82,6 +117,8 @@ pub struct UiState {
     pub subscription_order: Vec<String>,
     #[serde(default = "default_true")]
     pub auto_update_subs: bool,
+    #[serde(default = "default_theme")]
+    pub theme: String,
 }
 
 #[derive(Clone, Serialize, Deserialize, Debug)]
@@ -96,13 +133,23 @@ pub struct Settings {
     pub bypass_lan: bool,
     #[serde(default)]
     pub block_ads: bool,
+    // Inverts the default route: everything goes direct and only rules with the
+    // "proxy" action use the VPN. Without it there is no way to say "I only want the
+    // VPN for this one site".
+    #[serde(default)]
+    pub proxy_only_mode: bool,
     #[serde(default = "default_remote_dns")]
     pub remote_dns: String,
     #[serde(default = "default_local_dns")]
     pub local_dns: String,
     #[serde(default)]
     pub tls_fragment: bool,
-    #[serde(default = "default_true")]
+    // strict_route installs WFP filters that force every destination not listed in the TUN's
+    // route_exclude_address back into the tunnel. It did exactly that to the main core's own
+    // connection to the tunnel server: the adapter reported internet access while nothing proxied
+    // could load. Off is the shape 2.0.1 shipped and the one v2rayN's template ships; on stays
+    // selectable now that the server addresses are excluded, it is just not the default.
+    #[serde(default)]
     pub strict_route: bool,
     #[serde(default = "default_core")]
     pub core_choice: String,
@@ -135,16 +182,18 @@ impl Default for Settings {
             bypass_iran: true,
             bypass_lan: true,
             block_ads: false,
-            remote_dns: "https://1.1.1.1/dns-query".to_string(),
+            proxy_only_mode: false,
+            remote_dns: default_remote_dns(),
             local_dns: "local".to_string(),
             tls_fragment: false,
-            strict_route: true,
+            strict_route: false,
             core_choice: "auto".to_string(),
             subscriptions: vec![],
             servers,
             ui: UiState {
                 last_selected: None,
                 tun_enabled: false,
+                language: default_language(),
                 auto_reconnect: false,
                 auto_start: false,
                 start_minimized: false,
@@ -154,8 +203,57 @@ impl Default for Settings {
                 pinned_subscriptions: vec![],
                 subscription_order: vec![],
                 auto_update_subs: true,
+                theme: default_theme(),
             },
         }
+    }
+}
+
+impl Settings {
+    /// Collapses the process rules to one entry per image name.
+    ///
+    /// sing-box is first-match-wins, so a second rule for the same application never applied --
+    /// it sat beneath the first one and the toggle above it read as broken, which is how a user
+    /// ends up with one app listed under both Bypass and Proxy. The rule actually in force is the
+    /// first *enabled* one for that image (a disabled rule is not emitted at all), falling back to
+    /// the first one when none of them is enabled, so dropping the rest changes no routing.
+    /// Returns whether anything was removed, so the caller can persist the repair.
+    pub fn reconcile_process_rules(&mut self) -> bool {
+        let mut first_enabled = std::collections::HashMap::<String, usize>::new();
+        let mut first_any = std::collections::HashMap::<String, usize>::new();
+        for (i, rule) in self.routing_rules.iter().enumerate() {
+            if rule.kind != "process" {
+                continue;
+            }
+            let image = rule
+                .pattern
+                .rsplit(['\\', '/'])
+                .next()
+                .unwrap_or(&rule.pattern)
+                .to_ascii_lowercase();
+            first_any.entry(image.clone()).or_insert(i);
+            if rule.enabled {
+                first_enabled.entry(image).or_insert(i);
+            }
+        }
+
+        // One surviving index per image: the first enabled rule is the one actually in force,
+        // because a disabled rule is never written into the core's config; only when none of a
+        // image's rules is enabled does the first one stand in for the group.
+        let keep: std::collections::HashSet<usize> = first_any
+            .keys()
+            .map(|image| first_enabled.get(image).copied().unwrap_or(first_any[image]))
+            .collect();
+
+        let before = self.routing_rules.len();
+        let mut kept = Vec::with_capacity(keep.len());
+        for (i, rule) in self.routing_rules.drain(..).enumerate() {
+            if rule.kind != "process" || keep.contains(&i) {
+                kept.push(rule);
+            }
+        }
+        self.routing_rules = kept;
+        self.routing_rules.len() != before
     }
 }
 
@@ -188,9 +286,23 @@ impl SettingsManager {
         let _ = fs::create_dir_all(&file_path);
         file_path.push("settings.json");
 
-        let settings = if file_path.exists() {
+        let mut settings = if file_path.exists() {
             if let Ok(content) = fs::read_to_string(&file_path) {
-                serde_json::from_str(&content).unwrap_or_else(|_| Settings::default())
+                match serde_json::from_str::<Settings>(&content) {
+                    Ok(s) => s,
+                    // Reporting this is the difference between "my subscriptions vanished" and
+                    // "one row in my routing list was unreadable". The file is left as it is so
+                    // the user can recover it; overwriting it here would destroy the evidence.
+                    Err(e) => {
+                        eprintln!(
+                            "settings.json at {} was unreadable ({}); keeping the file and \
+                             starting from defaults",
+                            file_path.display(),
+                            e
+                        );
+                        Settings::default()
+                    }
+                }
             } else {
                 Settings::default()
             }
@@ -198,17 +310,32 @@ impl SettingsManager {
             Settings::default()
         };
 
+        // Run before anything else reads the rules, so the running cores and the saved file agree.
+        if settings.reconcile_process_rules() {
+            let _ = fs::write(&file_path, serde_json::to_string_pretty(&settings).unwrap_or_default());
+        }
+
         Self {
             file_path,
             settings,
         }
     }
 
+    /// Writes via a temp file in the same directory, then renames into place. A settings.json
+    /// written directly is truncated to zero by a crash or a power loss partway through the
+    /// write, and the next launch then silently resets every subscription and rule to defaults.
     pub fn save(&self) -> Result<(), String> {
         let content = serde_json::to_string_pretty(&self.settings)
             .map_err(|e| format!("Serialization error: {}", e))?;
-        fs::write(&self.file_path, content)
-            .map_err(|e| format!("Failed to save settings: {}", e))?;
+        let mut tmp = self.file_path.clone();
+        tmp.set_extension("json.tmp");
+        fs::write(&tmp, &content).map_err(|e| format!("Failed to save settings: {}", e))?;
+        fs::rename(&tmp, &self.file_path).map_err(|e| {
+            // Leave the settings file alone -- the rename is what failed, so the old one is
+            // still the last known good copy, and retrying the write is not the fix.
+            let _ = fs::remove_file(&tmp);
+            format!("Failed to save settings: {}", e)
+        })?;
         Ok(())
     }
 
@@ -333,6 +460,14 @@ impl SettingsManager {
         });
         // Remove server group
         self.settings.servers.remove(group_key);
+
+        // Drop every other place the url is still referenced, otherwise pins, ordering and
+        // stats keep pointing at a group that no longer exists. Same fields
+        // edit_subscription migrates when a url changes.
+        self.settings.ui.pinned_subscriptions.retain(|p| p != group_key);
+        self.settings.ui.subscription_order.retain(|o| o != group_key);
+        self.settings.stats.remove(group_key);
+
         let _ = self.save();
     }
 
@@ -344,5 +479,114 @@ impl SettingsManager {
             self.settings.ui.tun_enabled = te;
         }
         let _ = self.save();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn app_rule(id: &str, path: &str, action: &str, enabled: bool) -> RoutingRule {
+        RoutingRule {
+            id: id.into(),
+            pattern: path.into(),
+            action: action.into(),
+            kind: "process".into(),
+            enabled,
+        }
+    }
+
+    fn domain_rule(id: &str) -> RoutingRule {
+        RoutingRule {
+            id: id.into(),
+            pattern: "example.com".into(),
+            action: "direct".into(),
+            kind: "domain".into(),
+            enabled: true,
+        }
+    }
+
+    fn settings_with(rules: Vec<RoutingRule>) -> Settings {
+        let mut s = Settings::default();
+        s.routing_rules = rules;
+        s
+    }
+
+    #[test]
+    fn reconcile_keeps_one_rule_per_application() {
+        // The exact shape the user ended up with: the same Discord binary under both Bypass and
+        // Proxy, both enabled. Bypass came first, so it is the rule that is actually in force.
+        let mut s = settings_with(vec![
+            app_rule("1", "C:\\AppData\\Discord.exe", "bypass", true),
+            app_rule("2", "C:\\AppData\\Discord.exe", "proxy", true),
+        ]);
+
+        assert!(s.reconcile_process_rules());
+        assert_eq!(s.routing_rules.len(), 1);
+        assert_eq!(s.routing_rules[0].id, "1");
+        assert_eq!(s.routing_rules[0].action, "bypass");
+    }
+
+    #[test]
+    fn reconcile_matches_image_name_not_full_path() {
+        // sing-box keys a process rule on the bare image name, so these two are the same
+        // application written two ways and must collapse -- casing included.
+        let mut s = settings_with(vec![
+            app_rule("1", "C:\\Users\\me\\Spotify.exe", "bypass", true),
+            app_rule("2", "D:\\spotify.exe", "proxy", true),
+        ]);
+
+        assert!(s.reconcile_process_rules());
+        assert_eq!(s.routing_rules.len(), 1);
+        assert_eq!(s.routing_rules[0].id, "1");
+    }
+
+    #[test]
+    fn reconcile_prefers_the_enabled_rule() {
+        // A disabled rule is not emitted, so it is not in force: dropping the enabled copy beneath
+        // it would change the routing, not just tidy it up.
+        let mut s = settings_with(vec![
+            app_rule("1", "Telegram.exe", "bypass", false),
+            app_rule("2", "Telegram.exe", "proxy", true),
+        ]);
+
+        assert!(s.reconcile_process_rules());
+        assert_eq!(s.routing_rules.len(), 1);
+        assert_eq!(s.routing_rules[0].id, "2");
+        assert!(s.routing_rules[0].enabled);
+    }
+
+    #[test]
+    fn reconcile_leaves_domain_rules_alone() {
+        // Domains are not keyed on an image name, so duplicates there are a user's deliberate
+        // choice and none of this function's business.
+        let mut s = settings_with(vec![
+            app_rule("1", "Spotify.exe", "bypass", true),
+            app_rule("2", "Spotify.exe", "proxy", true),
+            domain_rule("3"),
+            domain_rule("4"), // same pattern as 3 -- a process dedup would have eaten it
+        ]);
+
+        assert!(s.reconcile_process_rules());
+        assert_eq!(s.routing_rules.len(), 3);
+        assert_eq!(
+            s.routing_rules
+                .iter()
+                .filter(|r| r.kind == "domain")
+                .count(),
+            2
+        );
+        assert_eq!(s.routing_rules[0].id, "1");
+    }
+
+    #[test]
+    fn reconcile_reports_nothing_to_do_when_clean() {
+        let mut s = settings_with(vec![
+            app_rule("1", "Spotify.exe", "bypass", true),
+            app_rule("2", "Discord.exe", "bypass", true),
+        ]);
+
+        assert!(!s.reconcile_process_rules());
+        assert_eq!(s.routing_rules.len(), 2);
     }
 }

@@ -1,6 +1,6 @@
 {
   "productName": "Vxray",
-  "version": "2.0.1",
+  "version": "2.1.0",
   "identifier": "com.vxray.app",
   "build": {
     "beforeDevCommand": "",
@@ -41,8 +41,6 @@
       "../bin/xray.exe",
       "../bin/geoip.dat",
       "../bin/geosite.dat",
-      "../bin/stat-tracker.exe",
-      "../bin/vxray-tun.exe",
       "../bin/wintun.dll"
     ],
     "publisher": "Vxray",

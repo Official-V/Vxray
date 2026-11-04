@@ -27,6 +27,17 @@ const btnTest = document.getElementById('btn-test');
 const btnLogs = document.getElementById('btn-logs');
 const statusLabel = document.getElementById('status-label');
 
+// Sets html[data-theme] and mirrors it to localStorage. The mirror is what the
+// pre-paint script in index.html reads on the next launch so the window never opens in
+// the wrong theme and flips; the backend copy is the authoritative record.
+function applyTheme(theme) {
+  if (theme !== 'light' && theme !== 'dark') theme = 'dark';
+  document.documentElement.setAttribute('data-theme', theme);
+  try { localStorage.setItem('vxray_theme', theme); } catch (_) {}
+  const toggle = document.getElementById('toggle-light-theme');
+  if (toggle && toggle.checked !== (theme === 'light')) toggle.checked = (theme === 'light');
+}
+
 function animateTextChange(element, newText) {
   if (!element || element.textContent === newText) return;
   element.style.transition = 'opacity 0.2s ease-in-out';
@@ -76,13 +87,24 @@ function animateIpAndFlag(newIp, newFlagSrc) {
       flagImg.src = '';
     }
 
-    ipAddress.animate(animIn, options);
-    flagImg.animate(animIn, options);
+    const ipIn = ipAddress.animate(animIn, options);
+    const flagIn = flagImg.animate(animIn, options);
+
+    // A forwards fill pins filter:blur(0) on the element forever, which outranks the
+    // .spoiler class and would stop the IP blur toggle from ever applying. Commit the
+    // end state by hand instead.
+    ipIn.onfinish = () => ipIn.cancel();
+    flagIn.onfinish = () => flagIn.cancel();
   }).catch(() => {});
 }
 
+let _lastDashState = 'offline';
+let _lastDashPing = null;
+
 function updateSmartDash(state, pingMs = null) {
-  
+  _lastDashState = state;
+  _lastDashPing = pingMs;
+
   const dash = document.getElementById('lcd-network');
   const capsule = document.getElementById('lcd-capsule');
 
@@ -102,54 +124,54 @@ function updateSmartDash(state, pingMs = null) {
   
   const IOS_SPINNER_HTML = `<div class="ios-spinner"><div class="blade"></div><div class="blade"></div><div class="blade"></div><div class="blade"></div><div class="blade"></div><div class="blade"></div><div class="blade"></div><div class="blade"></div><div class="blade"></div><div class="blade"></div><div class="blade"></div><div class="blade"></div></div>`;
 
-  const setCapsuleBadge = (text, color = 'rgba(255,255,255,0.4)', bg = 'rgba(255,255,255,0.06)') => {
+  const setCapsuleBadge = (text, color = null, bg = null) => {
     if (rimPing) {
       rimPing.textContent = text;
-      rimPing.style.color = color;
-      rimPing.style.background = bg;
-      rimPing.style.border = '1px solid rgba(255,255,255,0.08)';
-      rimPing.style.boxShadow = 'inset 0 1px 2px rgba(0,0,0,0.25)';
+      rimPing.style.color = color || 'var(--ov-04)';
+      rimPing.style.background = bg || 'var(--ov-006)';
+      rimPing.style.border = '1px solid var(--ov-008)';
+      rimPing.style.boxShadow = 'inset 0 1px 2px rgba(0,0,0,0.12)';
       rimPing.style.minWidth = '48px';
     }
   };
   
   if (state === 'offline') {
     icon.innerHTML = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><line x1="15" y1="9" x2="9" y2="15"></line><line x1="9" y1="9" x2="15" y2="15"></line></svg>';
-    title.textContent = 'Offline';
-    subtitle.textContent = 'Waiting for network...';
-    setCapsuleBadge('OFF', 'rgba(255,255,255,0.3)');
+    title.textContent = t('status.offline');
+    subtitle.textContent = t('status.waiting_network');
+    setCapsuleBadge('OFF', 'var(--ov-03)');
   } else if (state === 'online') {
     icon.innerHTML = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path><polyline points="22 4 12 14.01 9 11.01"></polyline></svg>';
-    title.textContent = 'System Ready';
-    subtitle.textContent = 'Idle';
-    setCapsuleBadge('READY', 'rgba(255,255,255,0.45)');
+    title.textContent = t('status.system_ready');
+    subtitle.textContent = t('status.idle');
+    setCapsuleBadge('READY', 'var(--ov-045)');
   } else if (state === 'processing') {
     icon.innerHTML = IOS_SPINNER_HTML;
-    title.textContent = 'Processing...';
-    subtitle.textContent = 'Connecting to server';
+    title.textContent = t('status.processing');
+    subtitle.textContent = t('status.connecting_server');
     if (rimPing) {
       rimPing.innerHTML = IOS_SPINNER_HTML;
-      rimPing.style.background = 'rgba(255,255,255,0.08)';
-      rimPing.style.border = '1px solid rgba(255,255,255,0.18)';
-      rimPing.style.boxShadow = 'inset 0 1px 2px rgba(0,0,0,0.25), 0 0 14px rgba(255,255,255,0.18)';
+      rimPing.style.background = 'var(--ov-008)';
+      rimPing.style.border = '1px solid var(--ov-018)';
+      rimPing.style.boxShadow = 'inset 0 1px 2px rgba(0,0,0,0.12), 0 0 14px var(--ov-018)';
       rimPing.style.minWidth = '48px';
     }
   } else if (state === 'timeout') {
     icon.innerHTML = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="8" x2="12" y2="12"></line><line x1="12" y1="16" x2="12.01" y2="16"></line></svg>';
-    title.textContent = 'Timeout';
-    
+    title.textContent = t('status.timeout');
+
     const livePingToggle = document.getElementById('toggle-live-ping');
     const isPingEnabled = livePingToggle ? livePingToggle.checked : true;
     const tunSwitch = document.getElementById('tun-toggle');
     const isTun = tunSwitch ? tunSwitch.checked : false;
-    
-    subtitle.textContent = isTun ? 'Global Tunnel Active' : 'System Proxy Active';
+
+    subtitle.textContent = t(isTun ? 'status.global_tunnel' : 'status.system_proxy');
     subtitle.style.color = 'var(--text-secondary)';
 
     setCapsuleBadge('ERR', '#fbbf24', 'rgba(251,191,36,0.1)');
   } else if (state === 'connected') {
     icon.innerHTML = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="pulse"><path d="M22 12h-4l-3 9L9 3l-3 9H2"></path></svg>';
-    title.textContent = 'Connected';
+    title.textContent = t('status.connected');
     
     const livePingToggle = document.getElementById('toggle-live-ping');
     const isPingEnabled = livePingToggle ? livePingToggle.checked : true;
@@ -168,11 +190,11 @@ function updateSmartDash(state, pingMs = null) {
         if (rimPing && rimPing.textContent && rimPing.textContent.includes('ms')) {
           // Preserve the last known ping value during transient updates
         } else {
-          setCapsuleBadge('PING', 'rgba(255,255,255,0.4)');
+          setCapsuleBadge('PING', 'var(--ov-04)');
         }
       } else {
         const pingColor = pingMs < 500 ? '#4ade80' : '#fbbf24';
-        setCapsuleBadge(pingMs + ' ms', pingColor, 'rgba(255,255,255,0.06)');
+        setCapsuleBadge(pingMs + ' ms', pingColor, 'var(--ov-006)');
       }
     }
   }
@@ -291,6 +313,25 @@ async function initApp() {
     if (tunToggle) { tunToggle.checked = tunEnabled; updateTunUIState(); }
       updateSmartDash('offline');
   } catch (_) {}
+  // Restore interface language before the dynamic lists render, so the first paint
+  // is already translated instead of flashing English and swapping.
+  try {
+    const lang = await invoke('get_language');
+    applyLanguage(lang);
+    const langSelectEl = document.getElementById('select-language');
+    if (langSelectEl && lang) {
+      langSelectEl.value = lang;
+      const sel = document.getElementById('language-dropdown-selected');
+      const dd = document.getElementById('language-dropdown');
+      if (dd && sel) {
+        dd.querySelectorAll('.custom-dropdown-option').forEach(o => {
+          const on = o.getAttribute('data-value') === lang;
+          o.classList.toggle('active', on);
+          if (on) sel.textContent = o.textContent.trim();
+        });
+      }
+    }
+  } catch (_) {}
 
   // Load Startup Settings
   let startupSettings = null;
@@ -303,8 +344,16 @@ async function initApp() {
       if (startupSettings.auto_start && rowStartMinimized) {
         rowStartMinimized.classList.add('enabled');
       }
+      applyTheme(startupSettings.theme);
     }
   } catch (_) {}
+
+  // The switch ships checked in index.html, so without this the TUN preference is whatever the
+  // markup happened to say rather than what the user last chose. The auto-reconnect below reads
+  // this checkbox for its mode, so a stale ON made a user who had switched TUN off reconnect
+  // through a tunnel -- and on a non-elevated launch that also triggered the elevation restart
+  // they had already declined.
+  await syncTunSwitchFromBackend();
 
   // Auto Reconnect Logic
   try {
@@ -319,32 +368,13 @@ async function initApp() {
 
   // Toggles handlers
   if (tunToggle) tunToggle.addEventListener('change', handleTunToggle);
-  
-  if (toggleAutoReconnect) {
-    toggleAutoReconnect.addEventListener('change', async (e) => {
-      await invoke('set_auto_reconnect', { enabled: e.target.checked });
-    });
-  }
 
-  if (toggleAutoStart) {
-    toggleAutoStart.addEventListener('change', async (e) => {
-      const enabled = e.target.checked;
-      await invoke('set_auto_start', { enabled });
-      if (rowStartMinimized) {
-        if (enabled) {
-          rowStartMinimized.classList.add('enabled');
-        } else {
-          rowStartMinimized.classList.remove('enabled');
-        }
-      }
-    });
-  }
-
-  if (toggleStartMinimized) {
-    toggleStartMinimized.addEventListener('change', async (e) => {
-      await invoke('set_start_minimized', { enabled: e.target.checked });
-    });
-  }
+  // The three General toggles are wired once, in initSettingsListeners, which also handles the
+  // dimming of Start Minimized. Attaching them here as well meant every flip invoked the
+  // backend twice, and these copies awaited an invoke with no catch -- a rejection became an
+  // unhandled promise rejection and the checkbox stayed flipped with no message. The branch
+  // below that toggled `.enabled` on #row-start-minimized was dead too: that id is not in
+  // index.html, so only the opacity/pointerEvents treatment in the other listener ever applied.
 
   // Load servers
   setTimeout(refreshServerList, 50);
@@ -357,6 +387,16 @@ async function initApp() {
   // Start timers
   livePingInterval = setInterval(runLivePing, 4000);
   crashCheckInterval = setInterval(checkCoreHealth, 2000);
+
+  // The backend reaps a core that died on its own and clears the system proxy it was
+  // carrying. It announces that here. checkCoreHealth owns the reconnect attempt and the
+  // back-off counters around it, and its guard is `if (!isRunning ...) return` -- so this
+  // listener must not touch isRunning, or the next poll would find the flag already cleared
+  // and never reconnect at all. It paints nothing either, for the same reason: a spinner set
+  // here would spin forever on the one path where that poll bails out early. Logging is safe.
+  window.__TAURI__.event.listen('core-died', () => {
+    log(t('log.core_died'));
+  }).catch(e => console.error('could not subscribe to core-died:', e));
 
   // Global drag handling to absolutely prevent the "not allowed" cross cursor anywhere in the window
   document.addEventListener('dragenter', (e) => {
@@ -377,6 +417,15 @@ async function initApp() {
       e.preventDefault();
     }
   });
+
+  // Version badge next to the logo. Read straight from the binary -- it is the one
+  // number the updater compares against, so it must not drift from the package metadata.
+  renderSupportVersion();
+
+  // Silent release check. A user behind a restricted route sees nothing of a failure
+  // here: only a found update lights the badges, and the card is left untouched until
+  // the user actually opens the tab and asks.
+  setTimeout(() => { checkForUpdates(false); }, 3000);
 }
 
 if (document.readyState === 'loading') {
@@ -427,10 +476,11 @@ let draggedGroupKey = null;
 
 async function togglePinSubscription(groupKey) {
   try {
-    await invoke('toggle_pin_subscription', { groupKey });
+    // Rust command parameter is `url` (the subscription URL, which is the group key)
+    await invoke('toggle_pin_subscription', { url: groupKey });
     await refreshServerList();
   } catch (e) {
-    log('Failed to pin subscription: ' + e);
+    log(t('log.pin_failed', null, {err: e}));
   }
 }
 
@@ -617,7 +667,8 @@ async function refreshServerList() {
             .map(el => el.dataset.groupKey);
 
           try {
-            await invoke('save_subscription_order', { order: newOrder });
+            // Rust command parameter is `urls`
+            await invoke('save_subscription_order', { urls: newOrder });
           } catch (_) {}
         }
       });
@@ -630,12 +681,16 @@ async function refreshServerList() {
       // Name
       const nameEl = document.createElement('span');
       nameEl.className = 'group-name';
-      nameEl.textContent = groupData.name || 'Unknown Group';
+      // The manual group's stored name is an English sentinel; map it at render time so
+      // the header follows the interface language without touching what is persisted.
+      nameEl.textContent = groupKey === 'manual'
+        ? t('subs.manual_name')
+        : (groupData.name || t('server.unknown_group'));
 
       if (isPinned) {
         const pinBadge = document.createElement('span');
         pinBadge.className = 'group-pin-badge';
-        pinBadge.title = 'Pinned to Top';
+        pinBadge.title = t('group.pin_to_top');
         pinBadge.innerHTML = '<svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><path d="M16 12V4H17V2H7V4H8V12L6 14V16H11V22H13V16H18V14L16 12Z"/></svg>';
         nameEl.appendChild(pinBadge);
       }
@@ -652,7 +707,7 @@ async function refreshServerList() {
       // Hover-visible ping button on the header (available for both manual & subscription groups)
       const hoverPingBtn = document.createElement('button');
       hoverPingBtn.className = 'group-action-btn ping-all-btn';
-      hoverPingBtn.title = 'Test Latency';
+      hoverPingBtn.title = t('group.test_latency');
       hoverPingBtn.innerHTML = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.55a11 11 0 0 1 14.08 0"></path><path d="M1.42 9a16 16 0 0 1 21.16 0"></path><path d="M8.53 16.11a6 6 0 0 1 6.95 0"></path><line x1="12" y1="20" x2="12.01" y2="20"></line></svg>';
       let groupPingActive = false;
       hoverPingBtn.addEventListener('click', async (e) => {
@@ -661,7 +716,7 @@ async function refreshServerList() {
           // Stop
           shouldStopTesting = true;
           invoke('cancel_latency_tests').catch(()=>{});
-          hoverPingBtn.title = 'Test Latency';
+          hoverPingBtn.title = t('group.test_latency');
           hoverPingBtn.innerHTML = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.55a11 11 0 0 1 14.08 0"></path><path d="M1.42 9a16 16 0 0 1 21.16 0"></path><path d="M8.53 16.11a6 6 0 0 1 6.95 0"></path><line x1="12" y1="20" x2="12.01" y2="20"></line></svg>';
           groupPingActive = false;
           
@@ -676,17 +731,17 @@ async function refreshServerList() {
           return;
         }
         groupPingActive = true;
-        hoverPingBtn.title = 'Stop';
+        hoverPingBtn.title = t('group.stop');
         hoverPingBtn.innerHTML = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="6" y="6" width="12" height="12"></rect></svg>';
         await pingGroup(groupKey);
-        hoverPingBtn.title = 'Test Latency';
+        hoverPingBtn.title = t('group.test_latency');
         hoverPingBtn.innerHTML = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.55a11 11 0 0 1 14.08 0"></path><path d="M1.42 9a16 16 0 0 1 21.16 0"></path><path d="M8.53 16.11a6 6 0 0 1 6.95 0"></path><line x1="12" y1="20" x2="12.01" y2="20"></line></svg>';
         groupPingActive = false;
       });
 
       const optionsBtn = document.createElement('button');
       optionsBtn.className = 'group-action-btn';
-      optionsBtn.title = 'Options';
+      optionsBtn.title = t('group.options');
       optionsBtn.innerHTML = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="1.5"></circle><circle cx="19" cy="12" r="1.5"></circle><circle cx="5" cy="12" r="1.5"></circle></svg>';
 
       const dropdownMenu = document.createElement('div');
@@ -695,19 +750,19 @@ async function refreshServerList() {
       // View Statistic (Both)
       const statsItem = document.createElement('button');
       statsItem.className = 'dropdown-item';
-      statsItem.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 20V10M12 20V4M6 20v-6"></path></svg> View Statistic';
+      statsItem.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 20V10M12 20V4M6 20v-6"></path></svg> ' + t('group.menu.view_stats');
       statsItem.addEventListener('click', (e) => {
         e.stopPropagation();
         dropdownMenu.classList.remove('show');
-        openStatsModal(groupKey, true, groupData.name || (groupKey === 'manual' ? 'Manually Added' : groupKey), groupData);
+        openStatsModal(groupKey, true, groupKey === 'manual' ? t('subs.manual_name') : (groupData.name || groupKey), groupData);
       });
 
       // Pin/Unpin Item (Both)
       const pinItem = document.createElement('button');
       pinItem.className = 'dropdown-item';
       pinItem.innerHTML = isPinned
-        ? '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="2" y1="2" x2="22" y2="22"></line><path d="M12 17v5M9 9l-3 3v3h12v-3l-3-3M15 4a2 2 0 0 1 2 2v2H7V6a2 2 0 0 1 2-2h6z"></path></svg> Unpin'
-        : '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 17v5M9 9l-3 3v3h12v-3l-3-3M15 4a2 2 0 0 1 2 2v2H7V6a2 2 0 0 1 2-2h6z"></path></svg> Pin to Top';
+        ? '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="2" y1="2" x2="22" y2="22"></line><path d="M12 17v5M9 9l-3 3v3h12v-3l-3-3M15 4a2 2 0 0 1 2 2v2H7V6a2 2 0 0 1 2-2h6z"></path></svg> ' + t('group.menu.unpin')
+        : '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 17v5M9 9l-3 3v3h12v-3l-3-3M15 4a2 2 0 0 1 2 2v2H7V6a2 2 0 0 1 2-2h6z"></path></svg> ' + t('group.menu.pin');
 
       pinItem.addEventListener('click', (e) => {
         e.stopPropagation();
@@ -716,30 +771,41 @@ async function refreshServerList() {
       });
 
       if (groupKey === 'manual') {
+        // TCP ping test for every manually added server
+        const tcpPingItem = document.createElement('button');
+        tcpPingItem.className = 'dropdown-item';
+        tcpPingItem.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 12h-4l-3 9L9 3l-3 9H2"></path></svg> ' + t('group.menu.tcp_ping');
+        tcpPingItem.addEventListener('click', (e) => {
+          e.stopPropagation();
+          dropdownMenu.classList.remove('show');
+          tcpPingGroup(groupKey);
+        });
+
         // Clear all manual servers
         const deleteItem = document.createElement('button');
         deleteItem.className = 'dropdown-item delete';
-        deleteItem.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg> Delete All Servers';
+        deleteItem.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg> ' + t('group.menu.delete_all_servers');
         deleteItem.addEventListener('click', async (e) => {
           e.stopPropagation();
           dropdownMenu.classList.remove('show');
           try {
             await invoke('clear_manual_servers');
-            log('All manual servers deleted.');
+            log(t('log.manual_deleted'));
             await refreshServerList();
           } catch (err) {
-            log('Failed to clear manual servers: ' + err);
+            log(t('log.clear_manual_failed', null, {err: err}));
           }
         });
 
         dropdownMenu.appendChild(statsItem);
         dropdownMenu.appendChild(pinItem);
+        dropdownMenu.appendChild(tcpPingItem);
         dropdownMenu.appendChild(deleteItem);
       } else {
         // Edit Subscription
         const editItem = document.createElement('button');
         editItem.className = 'dropdown-item';
-        editItem.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path></svg> Edit';
+        editItem.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path></svg> ' + t('common.edit');
         editItem.addEventListener('click', (e) => {
           e.stopPropagation();
           dropdownMenu.classList.remove('show');
@@ -749,7 +815,7 @@ async function refreshServerList() {
         // Share Link
         const shareItem = document.createElement('button');
         shareItem.className = 'dropdown-item';
-        shareItem.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="18" cy="5" r="3"></circle><circle cx="6" cy="12" r="3"></circle><circle cx="18" cy="19" r="3"></circle><line x1="8.59" y1="13.51" x2="15.42" y2="17.49"></line><line x1="15.41" y1="6.51" x2="8.59" y2="10.49"></line></svg> Share Link';
+        shareItem.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="18" cy="5" r="3"></circle><circle cx="6" cy="12" r="3"></circle><circle cx="18" cy="19" r="3"></circle><line x1="8.59" y1="13.51" x2="15.42" y2="17.49"></line><line x1="15.41" y1="6.51" x2="8.59" y2="10.49"></line></svg> ' + t('group.menu.share_link');
         shareItem.addEventListener('click', (e) => {
           e.stopPropagation();
           dropdownMenu.classList.remove('show');
@@ -760,7 +826,7 @@ async function refreshServerList() {
         const autoUpdateItem = document.createElement('button');
         autoUpdateItem.className = 'dropdown-item';
         const isAutoUpdate = groupData.auto_update || false;
-        autoUpdateItem.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"></polyline><path d="M20.49 15A9 9 0 0 1 3.51 9 9 9 0 0 1 20.49 15z"></path></svg> Auto Update <span class="toggle-badge' + (isAutoUpdate ? ' active' : '') + '">' + (isAutoUpdate ? 'ON' : 'OFF') + '</span>';
+        autoUpdateItem.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"></polyline><path d="M20.49 15A9 9 0 0 1 3.51 9 9 9 0 0 1 20.49 15z"></path></svg> ' + t('group.menu.auto_update') + ' <span class="toggle-badge' + (isAutoUpdate ? ' active' : '') + '">' + (isAutoUpdate ? t('common.on') : t('common.off')) + '</span>';
         autoUpdateItem.addEventListener('click', (e) => {
           e.stopPropagation();
           dropdownMenu.classList.remove('show');
@@ -770,7 +836,7 @@ async function refreshServerList() {
         const updateItem = document.createElement('button');
         updateItem.className = 'dropdown-item';
         updateItem.id = `group-update-${hashCode(groupKey)}`;
-        updateItem.innerHTML = '<svg class="update-svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"></polyline><polyline points="1 20 1 14 7 14"></polyline><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path></svg> Update';
+        updateItem.innerHTML = '<svg class="update-svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"></polyline><polyline points="1 20 1 14 7 14"></polyline><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path></svg> ' + t('common.update');
         updateItem.addEventListener('click', (e) => {
           e.stopPropagation();
           dropdownMenu.classList.remove('show');
@@ -779,11 +845,22 @@ async function refreshServerList() {
 
         const deleteItem = document.createElement('button');
         deleteItem.className = 'dropdown-item delete';
-        deleteItem.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg> Delete';
+        deleteItem.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg> ' + t('common.delete');
         deleteItem.addEventListener('click', (e) => {
           e.stopPropagation();
           dropdownMenu.classList.remove('show');
           deleteSubscription(groupKey);
+        });
+
+        // TCP ping: raw reachability of every config, no core involved, so it can run while a
+        // real-delay test is mid-flight without disturbing it.
+        const tcpPingItem = document.createElement('button');
+        tcpPingItem.className = 'dropdown-item';
+        tcpPingItem.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 12h-4l-3 9L9 3l-3 9H2"></path></svg> ' + t('group.menu.tcp_ping');
+        tcpPingItem.addEventListener('click', (e) => {
+          e.stopPropagation();
+          dropdownMenu.classList.remove('show');
+          tcpPingGroup(groupKey);
         });
 
         dropdownMenu.appendChild(editItem);
@@ -792,6 +869,7 @@ async function refreshServerList() {
         dropdownMenu.appendChild(autoUpdateItem);
         dropdownMenu.appendChild(pinItem);
         dropdownMenu.appendChild(updateItem);
+        dropdownMenu.appendChild(tcpPingItem);
         dropdownMenu.appendChild(deleteItem);
       }
 
@@ -898,7 +976,7 @@ async function refreshServerList() {
 
         const zabooneh = document.createElement('button');
         zabooneh.className = 'subscription-zabooneh' + (isDrawerOpen ? ' tab-open' : '');
-        zabooneh.title = 'Toggle Announcement';
+        zabooneh.title = t('common.toggle_announcement');
         zabooneh.innerHTML = `
           <span class="ann-tab-icon">
             <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -907,7 +985,7 @@ async function refreshServerList() {
               <line x1="8" y1="6" x2="8" y2="14"></line>
             </svg>
           </span>
-          <span class="ann-tab-label">Announcement</span>
+          <span class="ann-tab-label">${t('common.announcement')}</span>
           <span class="ann-tab-chevron">
             <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
               <polyline points="6 9 12 15 18 9"></polyline>
@@ -958,19 +1036,26 @@ async function refreshServerList() {
       serverList.appendChild(groupEl);
     }
 
-    // Add dragover to the server list container itself to prevent cross cursor in gaps
-    serverList.addEventListener('dragenter', (e) => {
-      if (draggedGroupKey) e.preventDefault();
-    });
-    serverList.addEventListener('dragover', (e) => {
-      if (draggedGroupKey) {
-        e.preventDefault();
-        e.dataTransfer.dropEffect = 'move';
-      }
-    });
+    // Add dragover to the server list container itself to prevent cross cursor in gaps.
+    // refreshServerList re-runs on every pin, update, delete and language change, and a plain
+    // addEventListener here would stack another pair on the persistent #server-list each time.
+    // The handlers are idempotent so nothing visibly breaks, but the count grows without bound
+    // for the lifetime of the window.
+    if (!serverList.dataset.dragWired) {
+      serverList.dataset.dragWired = '1';
+      serverList.addEventListener('dragenter', (e) => {
+        if (draggedGroupKey) e.preventDefault();
+      });
+      serverList.addEventListener('dragover', (e) => {
+        if (draggedGroupKey) {
+          e.preventDefault();
+          e.dataTransfer.dropEffect = 'move';
+        }
+      });
+    }
 
   } catch (e) {
-    log('Failed to load servers: ' + e);
+    log(t('log.load_servers_failed', null, {err: e}));
   }
 }
 
@@ -1034,6 +1119,13 @@ function createServerItem(serverData, groupKey) {
   latencyEl.id = `latency-${hashCode(link)}`;
   updateLatencyDisplay(latencyEl, latency);
 
+  // TCP ping lives in its own chip rather than as a second number in the one above. The two
+  // measure different things -- reachability of the server versus speed of a request through
+  // it -- and sharing an element would mean each test overwriting the other's result.
+  const tcpLatencyEl = document.createElement('div');
+  tcpLatencyEl.className = 'server-latency tcp';
+  tcpLatencyEl.id = `tcp-latency-${hashCode(link)}`;
+
   // Action Buttons
   const actionsEl = document.createElement('div');
   actionsEl.className = 'server-actions';
@@ -1043,7 +1135,7 @@ function createServerItem(serverData, groupKey) {
   actionsEl.appendChild(makeActionBtn('<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="3" ry="3"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>', async () => {
     await copyToClipboard(link);
     showServerCopiedFeedback(item);
-    log('Server link copied to clipboard.');
+    log(t('log.link_copied'));
   }));
   actionsEl.appendChild(makeActionBtn('<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"></path><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"></path></svg>', () => {
     openEditServerModal(groupKey, link);
@@ -1055,6 +1147,20 @@ function createServerItem(serverData, groupKey) {
     if (e.target.closest('.server-action-btn')) return;
     selectServer(link);
   });
+
+  // Double-click mirrors the connect button: connect when idle, switch when already
+  // connected elsewhere, disconnect when already on this one. Selecting first keeps the
+  // two paths reading the same state, so this can never disagree with the button.
+  item.addEventListener('dblclick', (e) => {
+    if (e.target.closest('.server-action-btn')) return;
+    e.preventDefault();
+    selectServer(link);
+    toggleConnection();
+  });
+
+  // Discoverability: the hint lives on the item rather than in the list header so it
+  // survives re-render.
+  item.title = t('server.double_click_hint');
 
   // Server Drag & Drop for playlist reordering
   let currentServerGhost = null;
@@ -1189,6 +1295,7 @@ function createServerItem(serverData, groupKey) {
   item.appendChild(flagEl);
   item.appendChild(nameEl);
   item.appendChild(latencyEl);
+  item.appendChild(tcpLatencyEl);
   item.appendChild(actionsEl);
 
   return item;
@@ -1222,13 +1329,13 @@ let isConnectToLinkActive = false;
 
 async function toggleConnection() {
   if (!selectedServerLink) {
-    log('Please select a server first.');
+    log(t('log.select_server_first'));
     return;
   }
   
   // ALWAYS allow forced disconnect if we are running or connecting to the selected server
   if ((isRunning || isConnectToLinkActive || isConnecting) && (connectedServerLink === selectedServerLink || !connectedServerLink)) {
-    log('Force aborting connection...');
+    log(t('log.aborting'));
     isInvoking = true;
     updateConnectBtnText();
     try {
@@ -1241,7 +1348,7 @@ async function toggleConnection() {
   }
 
   if (isInvoking || isConnectToLinkActive) {
-    log('Please wait, processing UI...');
+    log(t('log.processing_ui'));
     return;
   }
 
@@ -1253,7 +1360,7 @@ async function toggleConnection() {
       if (connectedServerLink === selectedServerLink) {
         await disconnect();
       } else {
-        log('Switching server...');
+        log(t('log.switching'));
         await connectToLink(selectedServerLink, true);
       }
     } else {
@@ -1267,7 +1374,7 @@ async function toggleConnection() {
 
   async function connectToLink(link, seamless) {
   if (isConnectToLinkActive) {
-    log('Connection in progress, ignoring click...');
+    log(t('log.in_progress'));
     return;
   }
   isConnectToLinkActive = true;
@@ -1278,7 +1385,7 @@ async function toggleConnection() {
     }
 
     connectedServerLink = link;
-  log(`Configuring core for: ${link.substring(0, 40)}...`);
+  log(t('log.configuring_core', null, {link: link.substring(0, 40)}));
 
   const tunMode = tunToggle.checked;
 
@@ -1290,7 +1397,7 @@ async function toggleConnection() {
   
   updateSmartDash('processing');
   animateIpAndFlag('---.---.---.---', null);
-  animateTextChange(document.getElementById('country-name'), 'Checking...');
+  animateTextChange(document.getElementById('country-name'), t('status.checking'));
     
     const item = document.querySelector(`.server-item[data-link="${link}"]`);
   if (item) {
@@ -1315,46 +1422,96 @@ async function toggleConnection() {
         overlay.style.justifyContent = 'center';
         overlay.style.zIndex = '9999';
         overlay.style.backdropFilter = 'blur(4px)';
-        overlay.innerHTML = '<div style="text-align:center; padding: 20px; border-radius: 12px; background: var(--bg-secondary);"><h3>Administrator Required</h3><p style="margin-top: 10px; color: var(--text-secondary);">Restarting Vxray as Administrator to enable TUN Mode...</p></div>';
+        overlay.innerHTML = `<div style="text-align:center; padding: 20px; border-radius: 12px; background: var(--bg-secondary);"><h3>${t('tun.admin_required')}</h3><p style="margin-top: 10px; color: var(--text-secondary);">${t('tun.admin_required_desc')}</p></div>`;
         document.body.appendChild(overlay);
         
-        setTimeout(() => invoke('restart_as_admin'), 3000);
+        // Same handover as the TUN toggle, with the same failure mode: the promise is fired on
+        // a timer nobody awaits, so a refused UAC leaves the sheet up and this connect's
+        // isRunning/isConnecting flags set forever. The catch undoes both, which is also what
+        // lets the user click Connect again -- with the flags still raised the button would
+        // only log that a connection is already in progress.
+        setTimeout(() => {
+          invoke('restart_as_admin').catch((e) => {
+            log(t('log.tun_elevation_failed', null, {err: e}));
+            overlay.remove();
+            isRunning = false;
+            isConnecting = false;
+            isConnectToLinkActive = false;
+            const givingUpItem = document.querySelector(`.server-item[data-link="${link}"]`);
+            if (givingUpItem) givingUpItem.classList.remove('processing');
+            updateConnectBtnText();
+            updateSmartDash('offline');
+          });
+        }, 3000);
         isConnectToLinkActive = false;
         return;
       }
-    } catch (_) {}
+    } catch (e) {
+      // `is_admin` rejecting here used to fall through to a connect that needs elevation it
+      // does not have. Report it and release the flags rather than silently connecting in
+      // the wrong mode.
+      log(t('log.tun_admin_check_failed', null, {err: e}));
+      isRunning = false;
+      isConnecting = false;
+      isConnectToLinkActive = false;
+      updateConnectBtnText();
+      updateSmartDash('offline');
+      return;
+    }
   }
 
     try {
         const result = await invoke('connect', { link, tunMode });
         
         if (!isRunning || connectedServerLink !== link) {
-            log('Connection was aborted by user.');
+            log(t('log.aborted'));
+            // The backend may still have brought the tunnel up by now. Leaving
+            // isConnecting set here is what pinned the UI on "Connecting" after a
+            // proxy-only toggle: we hold the in-progress guard, so no other
+            // connect is running, and the spinner has no owner left.
+            isConnecting = false;
+            updateConnectBtnText();
+            const abortedItem = document.querySelector(`.server-item[data-link="${link}"]`);
+            if (abortedItem) abortedItem.classList.remove('processing');
             return;
         }
 
         if (result === null || result === undefined || result === 'ok' || result === true) {
-          log('Connection established seamlessly.');
+          log(t('log.seamless'));
           
-          // Instantly update UI to Connected for blazing fast feel
-          isConnecting = false;
-          isTunRouted = true;
-          updateSmartDash('connected');
-          
-          const connectedItem = document.querySelector(`.server-item[data-link="${link}"]`);
-          if (connectedItem) {
-            connectedItem.classList.remove('processing', 'failed', 'timeout');
-            connectedItem.classList.add('connected');
+          if (!tunMode) {
+            // Instantly update UI to Connected for proxy mode
+            isConnecting = false;
+            isTunRouted = true;
+            updateSmartDash('connected');
+            
+            const connectedItem = document.querySelector(`.server-item[data-link="${link}"]`);
+            if (connectedItem) {
+              connectedItem.classList.remove('processing', 'failed', 'timeout');
+              connectedItem.classList.add('connected');
+            }
+          } else {
+            // For TUN mode, keep processing until checkIp verifies connectivity
+            isConnecting = true;
+            isTunRouted = false;
+            updateSmartDash('processing');
+            const connectedItem = document.querySelector(`.server-item[data-link="${link}"]`);
+            if (connectedItem) {
+              connectedItem.classList.remove('connected', 'failed', 'timeout');
+              connectedItem.classList.add('processing');
+            }
           }
           
           // Let IP checking run in background after a healthy delay to ensure old proxy socket is fully dead
-          setTimeout(() => checkIp(true), 200);
+          setTimeout(() => checkIp(true), 300);
+          // The new link may carry a transport the app rules cannot ride on.
+          refreshProcessRuleWarning();
       try { await invoke('save_last_connection', { link, tunMode }); } catch (_) {}
       
       // Start real live traffic tracking via clash API
       startTrafficTracking(link);
     } else {
-      log('Connection failed: ' + result);
+      log(t('log.failed_prefix', null, {err: result}));
       forceShowLogs();
       const item = document.querySelector(`.server-item[data-link="${link}"]`);
       if (item) {
@@ -1363,7 +1520,11 @@ async function toggleConnection() {
       await disconnect();
     }
   } catch (e) {
-    log('Error: ' + e);
+    if (errorTag(e) === 'log.tun_start_failed' || errorTag(e) === 'log.tun_adapter_unstable') {
+      await tunFellBackToProxy(link, e);
+      return;
+    }
+    log(t('log.error_prefix', null, {err: e}));
     forceShowLogs();
     const item = document.querySelector(`.server-item[data-link="${link}"]`);
     if (item) {
@@ -1411,11 +1572,12 @@ async function startTrafficTracking(link) {
           try {
             const data = JSON.parse(chunk);
               const speed = data.up + data.down;
+              const up = data.up || 0;
               if (speed > 0) {
                 const date = getLocalDate();
                 const item = Array.from(document.querySelectorAll('.server-item')).find(el => el.dataset.link === link);
                 const group = item ? item.dataset.group : null;
-                invoke('add_live_traffic', { link, group, speed, date }).then(res => {
+                invoke('add_live_traffic', { link, group, speed, upload: up, date }).then(res => {
                   if (res) {
                     // Update group (subscription) UI live
                     if (group) {
@@ -1423,6 +1585,10 @@ async function startTrafficTracking(link) {
                       const usageEl = document.getElementById(`client-usage-${hash}`);
                       if (usageEl) {
                         usageEl.textContent = formatBytes(res.group_total);
+                      }
+                      const uploadEl = document.getElementById(`client-upload-${hash}`);
+                      if (uploadEl) {
+                        uploadEl.textContent = formatBytes(res.group_upload);
                       }
                     }
                   }
@@ -1453,6 +1619,38 @@ async function startTrafficTracking(link) {
   connectAndRead();
 }
 
+// The backend tags the errors it raises after already saving the session: "i18n:<key>" for
+// a self-contained message, or "i18n:<key>|<detail>" when it also has a raw cause to show.
+// i18n.js owns the protocol; this is the read side for the error handlers below.
+function errorTag(e) {
+  return isTaggedError(e) ? e.slice(5).split('|', 2)[0] : null;
+}
+
+// A TUN failure that reaches the frontend is not a failed connection: the backend fell back
+// to the system proxy and the core is up, so disconnecting here would hang up a working
+// session one line after telling the user it still works. Settle the UI into the state the
+// machine is actually in -- proxy mode, TUN switch off -- and leave the session alone.
+async function tunFellBackToProxy(link, e) {
+  const connectedItem = document.querySelector(`.server-item[data-link="${link}"]`);
+  if (connectedItem) connectedItem.classList.remove('processing');
+  isRunning = true;
+  isConnecting = false;
+  isReconnecting = false;
+  connectedServerLink = link;
+  isTunRouted = false;
+  updateSmartDash('connected');
+  updateConnectBtnText();
+  syncTunSwitchFromBackend();
+  // Proxy mode can carry the per-app rules a TUN adapter could not, so a warning that was
+  // showing a beat ago no longer applies.
+  refreshProcessRuleWarning();
+  startTrafficTracking(link);
+  try { await invoke('save_last_connection', { link, tunMode: false }); } catch (_) {}
+  setTimeout(() => checkIp(true), 200);
+  log(e);
+  forceShowLogs();
+}
+
 async function disconnect() {
   try {
     await invoke('disconnect');
@@ -1474,6 +1672,8 @@ async function disconnect() {
   connectedServerLink = null;
   consecutivePingFailures = 0;
   isConnectToLinkActive = false;
+  // Nothing is connected, so any rule that looked inert has nothing to warn about now.
+  refreshProcessRuleWarning();
 
   // Instantly update the UI to offline/online state
   if (baseIp) {
@@ -1488,10 +1688,23 @@ async function disconnect() {
   updateConnectBtnText();
   
   // Background task: check local IP and update flag/country
+  // The disconnect that fired this is not awaited anywhere, so a user who reconnects in the
+  // second or two this request takes is fully connected again by the time it lands. Applying
+  // the result unconditionally would then flip a live dashboard back to READY and paint the
+  // unproxied IP on top of the real one, where it stays -- nothing else in the UI repaints the
+  // IP on its own. Capture what was connected when this started and drop the result if it is
+  // no longer this disconnect's world.
+  const disconnectToken = ++checkIpToken;
   invoke('check_ip', { useProxy: false }).then(data => {
+    if (disconnectToken !== checkIpToken) return;
+    if (isRunning || connectedServerLink) return;
     const parsed = typeof data === 'string' ? JSON.parse(data) : data;
     if (parsed.query) {
-      animateTextChange(countryName, parsed.country || 'Unknown');
+      // The sidecar is in no hurry to die, and while it is still up this request rides it even
+      // though it asked for no proxy. Painting the tunnel's exit IP as the local one would make
+      // the next connect compare the real proxied IP against it and report no routing.
+      if (parsed.tun_routed) return;
+      animateTextChange(countryName, parsed.country || t('dock.unknown_country'));
       const code = (parsed.countryCode || '').toLowerCase();
       let flagSrc = null;
       if (code && code !== 'unknown') {
@@ -1505,25 +1718,36 @@ async function disconnect() {
 }
 
 function updateConnectBtnText() {
-  if (!selectedServerLink) return;
   const btnConnect = document.getElementById('btn-connect');
   if (!btnConnect) return;
   const textSpan = btnConnect.querySelector('.connect-text');
 
+  if (!selectedServerLink) {
+    // Nothing is selected. This used to early-return and keep whatever label a previous
+    // selection had painted, so deleting the connected server left a button reading
+    // "Disconnect" that only logged "select a server first" when clicked -- a control that
+    // explains neither its state nor why it does nothing.
+    if (textSpan) textSpan.textContent = t('common.connect');
+    btnConnect.classList.remove('disconnect');
+    const group = document.getElementById('lcd-capsule');
+    if (group) group.classList.remove('disconnect');
+    return;
+  }
+
   if (isRunning) {
     if (selectedServerLink === connectedServerLink) {
-      if (textSpan) textSpan.textContent = 'Disconnect';
+      if (textSpan) textSpan.textContent = t('common.disconnect');
       btnConnect.classList.add('disconnect');
       const group = document.getElementById('lcd-capsule');
       if (group) group.classList.add('disconnect');
     } else {
-      if (textSpan) textSpan.textContent = 'Switch Server';
+      if (textSpan) textSpan.textContent = t('common.switch_server');
       btnConnect.classList.remove('disconnect');
       const group = document.getElementById('lcd-capsule');
       if (group) group.classList.remove('disconnect');
     }
   } else {
-    if (textSpan) textSpan.textContent = 'Connect';
+    if (textSpan) textSpan.textContent = t('common.connect');
     btnConnect.classList.remove('disconnect');
     const group = document.getElementById('lcd-capsule');
     if (group) group.classList.remove('disconnect');
@@ -1531,19 +1755,26 @@ function updateConnectBtnText() {
 }
 
 // ===== IP Check =====
+// Bumped by every connect and every disconnect, so an in-flight `check_ip` can tell whether
+// the state it was launched against is still the state on screen. See `disconnect` for why a
+// late result is worse than no result.
+let checkIpToken = 0;
+
 async function checkIp(useProxy) {
   if (useProxy && !isRunning) return;
 
+  const myToken = ++checkIpToken;
   try {
     const data = await invoke('check_ip', { useProxy });
     if (useProxy && !isRunning) return; // Disconnected while awaiting
+    if (myToken !== checkIpToken) return; // A later connect or disconnect superseded this one
     
     const parsed = typeof data === 'string' ? JSON.parse(data) : data;
 
     if (parsed.error) {
       if (isRunning && isConnecting) {
-        if (Date.now() - connectStartTime > 2500) {
-          log('Connection timeout: Server unreachable.');
+        if (Date.now() - connectStartTime > 15000) {
+          log(t('log.timeout_unreachable'));
           isConnecting = false;
           consecutivePingFailures = 4; // Force ping failure state so it matches
           updateSmartDash('timeout');
@@ -1561,15 +1792,19 @@ async function checkIp(useProxy) {
         setTimeout(() => checkIp(useProxy), pollInterval);
         return;
       }
-      animateTextChange(countryName, 'Failed');
-      animateIpAndFlag('Failed', 'data:image/svg+xml;charset=utf-8,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 24 24%22 fill=%22%2394a3b8%22%3E%3Cpath d=%22M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 17.93c-3.95-.49-7-3.85-7-7.93 0-.62.08-1.21.21-1.79L9 15v1c0 1.1.9 2 2 2v1.93zm6.9-2.54c-.26-.81-1-1.39-1.9-1.39h-1v-3c0-.55-.45-1-1-1H8v-2h2c.55 0 1-.45 1-1V7h2c1.1 0 2-.9 2-2v-.41c2.93 1.19 5 4.06 5 7.41 0 2.08-.8 3.97-2.1 5.39z%22/%3E%3C/svg%3E');
+      animateTextChange(countryName, t('dock.ip_failed'));
+      animateIpAndFlag(t('dock.ip_failed'), 'data:image/svg+xml;charset=utf-8,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 24 24%22 fill=%22%2394a3b8%22%3E%3Cpath d=%22M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 17.93c-3.95-.49-7-3.85-7-7.93 0-.62.08-1.21.21-1.79L9 15v1c0 1.1.9 2 2 2v1.93zm6.9-2.54c-.26-.81-1-1.39-1.9-1.39h-1v-3c0-.55-.45-1-1-1H8v-2h2c.55 0 1-.45 1-1V7h2c1.1 0 2-.9 2-2v-.41c2.93 1.19 5 4.06 5 7.41 0 2.08-.8 3.97-2.1 5.39z%22/%3E%3C/svg%3E');
       return;
     }
 
     if (isRunning && isConnecting) {
-      if (!useProxy && baseIp && parsed.query === baseIp) {
+      // A TUN adapter routes the app's own unproxied requests too, so this probe reports the
+      // tunnel's exit IP and the comparison underneath can only ever agree. In that mode "traffic
+      // is not being routed" is undecidable from two IPs that cannot differ, so the test is
+      // skipped rather than allowed to call a working tunnel a timeout.
+      if (!useProxy && !parsed.tun_routed && baseIp && parsed.query === baseIp) {
         if (Date.now() - connectStartTime > 15000) {
-          log('Connection timeout: Interface routing delay.');
+          log(t('log.timeout_routing'));
           isConnecting = false;
           consecutivePingFailures = 4;
           updateSmartDash('timeout');
@@ -1596,25 +1831,33 @@ async function checkIp(useProxy) {
 
     if (isRunning) {
       if (!useProxy) {
-        if (parsed.query && !baseIp) baseIp = parsed.query;
+        // The probe that asks for no proxy still rides a live TUN adapter, so in that mode its
+        // address is the tunnel's exit and storing it here would poison the comparison above
+        // for the whole session.
+        if (parsed.query && !baseIp && !parsed.tun_routed) baseIp = parsed.query;
         return; // Prevent delayed local IP check from overwriting VPN IP
       }
 
       if (isConnecting && isTunRouted) {
         consecutiveReconnects = 0;
-        log(`Connected! IP: ${parsed.query}`);
+        log(t('log.connected_ip', null, {ip: parsed.query}));
       } else if (!isConnecting && !testingActive) {
         // Do not overwrite ping
       }
     } else {
-      // Not connected but got an IP â€” we're online (just idle)
+      // Not connected but got an IP — we're online (just idle)
       if (!useProxy) {
-        updateSmartDash('online');
-        baseIp = parsed.query;
+        // A sidecar still winding down answers this probe through the tunnel, so the address is
+        // not the machine's own. Leaving baseIp empty shows no IP rather than recording one the
+        // next connect would compare its proxied IP against.
+        if (!parsed.tun_routed) {
+          updateSmartDash('online');
+          baseIp = parsed.query;
+        }
       }
     }
 
-    animateTextChange(countryName, parsed.country || 'Unknown');
+    animateTextChange(countryName, parsed.country || t('dock.unknown_country'));
     const code = (parsed.countryCode || '').toLowerCase();
     let flagSrc = null;
     if (code && code !== 'unknown') {
@@ -1624,7 +1867,7 @@ async function checkIp(useProxy) {
   } catch (e) {
     if (isRunning && isConnecting) {
       if (Date.now() - connectStartTime > 5000) {
-        log('Connection timeout: Network error.');
+        log(t('log.timeout_network'));
         isConnecting = false;
         consecutivePingFailures = 4;
         updateSmartDash('timeout');
@@ -1645,6 +1888,13 @@ async function checkIp(useProxy) {
 }
 
 // ===== Live Ping =====
+// The `.ping-off` class this used to toggle has no CSS rule, so it did nothing. The
+// badge actually reflects the setting inside updateSmartDash (static "LIVE" vs. the
+// live ms value), so re-rendering the dash is what makes the toggle visible.
+function applyLivePingToggle() {
+  updateSmartDash(_lastDashState, _lastDashPing);
+}
+
 async function runLivePing() {
   if (!isRunning || !connectedServerLink) {
     updateLivePingLabel(null);
@@ -1675,7 +1925,7 @@ function updateLivePingLabel(latency) {
     consecutivePingFailures++;
     
     if (consecutivePingFailures >= 4) {
-      log('Server may be unreachable (ping timeout).');
+      log(t('log.may_be_unreachable'));
       if (isConnecting) {
         isConnecting = false; // Give up loading state and show timeout visually
       }
@@ -1731,11 +1981,65 @@ let isReconnecting = false;
 let consecutiveReconnects = 0;
 
 async function checkCoreHealth() {
-  if (!isRunning || isReconnecting || isConnectToLinkActive) return;
+  // A mode switch holds the backend's reload lock for as long as it is bringing the adapter up,
+  // and `revive_tun` takes the same lock. A beat that fires mid-switch queues a repair behind a
+  // supervised bring-up that will report its own outcome, and the next beat queues another. Each
+  // one then runs its own reload once the lock is free, so a slow adapter stopped being slow and
+  // became a freeze. `isConnecting` is set for the whole switch in `handleTunToggle` and cleared
+  // on every path out of it.
+  if (!isRunning || isReconnecting || isConnectToLinkActive || isConnecting) return;
 
   try {
     const alive = await invoke('is_core_alive');
       if (!alive) {
+        // A TUN session is two processes: the adapter and the core beneath it. Losing the adapter
+        // used to be answered by reconnecting, which kills the core as well -- the session dies
+        // over one replaceable process, and that is the "the connection dies" half of TUN mode.
+        // Ask for the adapter alone back first. It reports whether the session survived without a
+        // reconnect; a session it cannot repair returns false and takes the reconnect below.
+        let revived = false;
+        try {
+          revived = await invoke('revive_tun');
+        } catch (e) {
+          // The reload lands in proxy mode when the adapter will not stay up, and the backend tags
+          // the error for a human message. Log it and let the reconnect decide whether it is still
+          // needed -- the liveness re-check below is what stops a needless one.
+          log(e);
+          // The backend cleared its TUN flag on the way down, and the switch has to agree before
+          // the reconnect below reads it: `connectToLink` takes its mode from this checkbox, so a
+          // stale ON sends the repair straight back into the same adapter that just failed.
+          await syncTunSwitchFromBackend();
+          revived = false;
+        }
+
+        if (revived) {
+          // The adapter is a new process, so the routes it published are new too; the dashboard is
+          // otherwise showing the latency of an adapter that no longer exists.
+          isTunRouted = true;
+          consecutivePingFailures = 0;
+          // `revive_tun` reports success only once the adapter has installed a default route, so
+          // the dashboard can settle on the real state right away rather than on a process that
+          // is alive but still coming up. Without this the poll's next beat would repaint a
+          // latency for a tunnel that is not carrying anything yet.
+          updateSmartDash('connected');
+          return;
+        }
+
+        // The session really is gone, or the reload could not save it. Re-check liveness before
+        // reconnecting: a sidecar the reload repaired between the two calls leaves nothing to do,
+        // and reconnecting anyway is the needless disconnect this whole branch exists to avoid.
+        if (await invoke('is_core_alive')) {
+          // The reload put the session into proxy mode when it could not bring the adapter back,
+          // and this is the only path that knows. `isTunRouted` is still true from before and the
+          // ping label below believes it, so the dashboard keeps advertising a tunnel over a
+          // machine that routes through the system proxy.
+          if (isTunRouted) {
+            isTunRouted = false;
+            await syncTunSwitchFromBackend();
+          }
+          return;
+        }
+
         // Save the link before any state changes
         const savedLink = connectedServerLink;
         if (!savedLink) return;
@@ -1745,18 +2049,23 @@ async function checkCoreHealth() {
         updateSmartDash('processing');
         
         if (consecutiveReconnects > 3) {
-          log(`Core failed to start ${consecutiveReconnects} times. Giving up.`);
+          log(t('log.core_start_failed', null, {count: consecutiveReconnects}));
           isReconnecting = false;
-          disconnect();
+          isRunning = false;
+          // Cleared before the disconnect is awaited rather than after: until that async call
+          // lands, isRunning is still true, so the next 2s poll saw a dead core and started
+          // another reconnect cycle on top of this give-up -- the two took turns logging
+          // "failed" and "reconnecting" indefinitely.
+          await disconnect();
           return;
         }
 
-        log(`Core stopped. Auto-reconnecting (${consecutiveReconnects}) to ${savedLink.substring(0, 40)}...`);
+        log(t('log.core_reconnecting', null, {count: consecutiveReconnects, link: savedLink.substring(0, 40)}));
         
         // Wait a moment then reconnect
         setTimeout(async () => {
           if (isConnectToLinkActive || !isReconnecting) {
-              log('User initiated connection or cancelled. Aborting auto-reconnect.');
+              log(t('log.reconnect_aborted'));
               isReconnecting = false;
               return;
           }
@@ -1769,7 +2078,7 @@ async function checkCoreHealth() {
             isReconnecting = false;
             // We do not reset consecutiveReconnects here; we wait for a successful connection to do it.
           } catch (e) {
-            log('Auto-reconnect failed: ' + e + '. Retrying in 3s...');
+            log(t('log.reconnect_failed', null, {err: e}));
             // Restore state for next retry attempt
             connectedServerLink = savedLink;
             isRunning = true; // Keep health check alive
@@ -1788,20 +2097,20 @@ async function testAllLatency() {
   if (testingActive) {
     shouldStopTesting = true;
     invoke('cancel_latency_tests').catch(()=>{});
-    if (btnTest) { btnTest.textContent = 'Stopping...'; btnTest.disabled = true; }
+    if (btnTest) { btnTest.textContent = t('ping.stopping'); btnTest.disabled = true; }
     return;
   }
-  
+
   testingActive = true;
   shouldStopTesting = false;
   invoke('start_latency_tests').catch(()=>{});
-  if (btnTest) btnTest.textContent = 'Stop Testing';
+  if (btnTest) btnTest.textContent = t('ping.stop_testing');
 
   const links = [];
   document.querySelectorAll('.server-item').forEach(item => {
     links.push(item.dataset.link);
     const latEl = item.querySelector('.server-latency');
-    if (latEl) updateLatencyDisplay(latEl, '...');
+    if (latEl) updateLatencyDisplay(latEl, t('ping.testing'));
   });
 
   if (links.length === 0) {
@@ -1838,15 +2147,21 @@ async function testAllLatency() {
   await Promise.all(workers);
 
   if (shouldStopTesting) {
+    const placeholder = t('ping.testing');
     document.querySelectorAll('.server-item').forEach(item => {
       const latEl = item.querySelector('.server-latency');
-      if (latEl && (latEl.textContent === '...' || latEl.textContent === 'Testing...')) {
+      if (latEl && (latEl.textContent === placeholder || latEl.textContent === '...')) {
         updateLatencyDisplay(latEl, '');
       }
     });
   }
 
-  finishLatencyTest();
+  // The flags have to reset on every exit path, not just the stop path. This used to call a
+  // `finishLatencyTest` that does not exist anywhere in the app, so the normal completion threw
+  // here, `testingActive` stayed true, and pingSingleItem/pingGroup have been silently refusing
+  // to run ever after -- they gate on that flag.
+  testingActive = false;
+  shouldStopTesting = false;
 }
 
 async function pingSingleItem(link) {
@@ -1880,7 +2195,10 @@ function updateLatencyDisplay(el, latency) {
 
   if (typeof latency === 'number') {
     el.textContent = `${latency} ms`;
-    if (latency < 500) {
+    if (latency < 0) {
+      // Negative latency (e.g. -1) means the test failed/timed out.
+      el.className = 'server-latency red';
+    } else if (latency < 500) {
       el.className = 'server-latency green';
     } else {
       el.className = 'server-latency yellow';
@@ -1896,13 +2214,17 @@ function updateLatencyDisplay(el, latency) {
 }
 
 // ===== Settings =====
+// The one list of schemes this client can import. Both the smart-add box and the import modal
+// classify pasted text against it, so a second copy anywhere would drift and silently stop
+// recognising a scheme the parser still accepts.
+const PROXY_PREFIXES = ['vless://', 'vmess://', 'ss://', 'trojan://', 'hy2://', 'hysteria2://', 'tuic://'];
+
 async function handleSmartAdd() {
   const input = document.getElementById('txt-input');
   const text = input.value.trim();
   if (!text) return;
 
-  const proxyProtocols = ['vless://', 'vmess://', 'ss://', 'trojan://', 'hy2://', 'hysteria2://', 'tuic://'];
-  const isProxy = proxyProtocols.some(p => text.startsWith(p));
+  const isProxy = PROXY_PREFIXES.some(p => text.toLowerCase().startsWith(p));
 
   if (text.startsWith('http') && text.includes('://') && !isProxy) {
     // Subscription URL
@@ -1911,7 +2233,7 @@ async function handleSmartAdd() {
       input.value = '';
       await updateAllSubscriptions();
     } catch (e) {
-      log('Failed to add subscription: ' + e);
+      log(t('log.add_sub_failed', null, {err: e}));
     }
   } else if (text.includes('://')) {
     // Single server link
@@ -1921,20 +2243,30 @@ async function handleSmartAdd() {
       await refreshServerList();
       switchTab(0);
     } catch (e) {
-      log('Failed to add server: ' + e);
+      log(t('log.add_server_failed', null, {err: e}));
     }
+  } else {
+    // Neither a subscription URL nor a server link. Falling through silently left the text in
+    // the box and no message anywhere, which reads as the button having ignored the click.
+    log(t('log.add_unrecognised'));
   }
 }
 
-async function updateAllSubscriptions() {
+async function updateAllSubscriptions(force) {
   const btn = document.getElementById('btn-update-subs');
   const allBtn = document.getElementById('btn-update-all-subs');
-  if (btn) { btn.disabled = true; btn.textContent = 'Updating...'; }
+  if (btn) { btn.disabled = true; btn.textContent = t('log.updating'); }
   if (allBtn) {
     allBtn.disabled = true;
     const svg = allBtn.querySelector('.update-all-svg');
     if (svg) svg.classList.add('spin');
   }
+
+  // Counted rather than assumed: the loop below swallows every per-subscription failure, so a
+  // provider that blocks every fetch used to end with "subscriptions updated" logged anyway and
+  // the stale lists left looking fresh. The message is only honest when something actually ran.
+  let attempted = 0;
+  let failed = 0;
 
   try {
     const subsRaw = await invoke('get_subscriptions');
@@ -1943,10 +2275,14 @@ async function updateAllSubscriptions() {
     if (Array.isArray(subs)) {
       for (const sub of subs) {
         const u = typeof sub === 'string' ? sub : (sub.url || sub);
-        if (u && u !== 'manual') {
+        // A subscription the user set to Manual must be skipped by the automatic
+        // refresh; only an explicit "Update All" press overrides it.
+        if (u && u !== 'manual' && (force || sub.auto_update !== false)) {
+          attempted++;
           try {
             await invoke('update_subscription', { url: u });
           } catch (e) {
+            failed++;
             console.error('Failed to update ' + u + ': ' + e);
           }
         }
@@ -1954,13 +2290,21 @@ async function updateAllSubscriptions() {
     }
     await refreshServerList();
     await refreshSubscriptions();
-    log('Subscriptions updated.');
+    if (attempted === 0) {
+      log(t('log.subs_nothing_to_update'));
+    } else if (failed === attempted) {
+      log(t('log.subs_updated_none'));
+    } else if (failed > 0) {
+      log(t('log.subs_updated_partial', null, {ok: attempted - failed, fail: failed}));
+    } else {
+      log(t('log.subs_updated'));
+    }
   } catch (e) {
-    log('Update failed: ' + e);
+    log(t('log.update_failed', null, {err: e}));
   } finally {
     if (btn) {
       btn.disabled = false;
-      btn.textContent = 'Update All Subscriptions';
+      btn.textContent = t('page.subscriptions.update_all');
     }
     if (allBtn) {
       allBtn.disabled = false;
@@ -1990,7 +2334,7 @@ async function deleteServer(groupKey, link) {
     }
     await refreshServerList();
   } catch (e) {
-    log('Delete failed: ' + e);
+    log(t('log.delete_failed', null, {err: e}));
     await refreshServerList();
   }
 }
@@ -1998,10 +2342,10 @@ async function deleteServer(groupKey, link) {
 async function deleteSubscription(groupKey) {
   try {
     await invoke('delete_subscription', { groupKey });
-    log('Subscription removed.');
+    log(t('log.sub_removed'));
     await refreshServerList();
   } catch (e) {
-    log('Delete subscription failed: ' + e);
+    log(t('log.delete_sub_failed', null, {err: e}));
   }
 }
 
@@ -2013,9 +2357,9 @@ async function updateSingleSubscription(groupKey) {
   try {
     await invoke('update_subscription', { url: groupKey });
     await refreshServerList();
-    log('Subscription updated: ' + (groupKey.split('/')[2] || groupKey));
+    log(t('log.sub_updated', null, {name: (groupKey.split('/')[2] || groupKey)}));
   } catch (e) {
-    log('Update failed: ' + e);
+    log(t('log.update_failed', null, {err: e}));
   }
 
   if (btn) btn.classList.remove('updating');
@@ -2041,13 +2385,13 @@ async function pingGroup(groupKey) {
   items.forEach(item => {
     links.push(item.dataset.link);
     const latEl = item.querySelector('.server-latency');
-    if (latEl) updateLatencyDisplay(latEl, '...');
+    if (latEl) updateLatencyDisplay(latEl, t('ping.testing'));
   });
-  links.forEach(link => updateLatencyUi(link, 'Testing...'));
+  links.forEach(link => updateLatencyUi(link, t('ping.testing')));
     try {
       const results = await invoke('test_all_latency', { links });
       const parsed = typeof results === 'string' ? JSON.parse(results) : results;
-      
+
       for (const [link, latency] of Object.entries(parsed)) {
         updateLatencyUi(link, latency);
       }
@@ -2057,35 +2401,150 @@ async function pingGroup(groupKey) {
     }
   }
 
-  // Clean up stopped items
-  if (shouldStopTesting) {
-    items.forEach(item => {
-      const latEl = item.querySelector('.server-latency');
-      if (latEl && (latEl.textContent === '...' || latEl.textContent === 'Testing...')) {
-        updateLatencyDisplay(latEl, '');
-      }
-    });
-  }
+  // A failed or partial response leaves the chips the backend never answered on the translated
+  // "Testing..." string for good, which reads as a test that never finished. Anything still
+  // showing the placeholder has no result to show, on either exit path.
+  const placeholder = t('ping.testing');
+  items.forEach(item => {
+    const latEl = item.querySelector('.server-latency');
+    if (latEl && (latEl.textContent === placeholder || latEl.textContent === '...')) {
+      updateLatencyDisplay(latEl, '');
+    }
+  });
 
   testingActive = false;
   shouldStopTesting = false;
 }
 
+// Reachability of every server in a group, measured by a raw TCP connect. Deliberately touches
+// none of the state the real-delay path uses: `testingActive`, `shouldStopTesting` and the
+// backend's CANCEL_TESTS all gate that path, and setting them here would cut short a real-delay
+// test running at the same time. The backend bounds each connect itself, so there is no stop
+// button to wire and no flag to leave stuck at true if this throws.
+let tcpTestingActive = false;
+
+async function tcpPingGroup(groupKey) {
+  if (tcpTestingActive) return;
+  tcpTestingActive = true;
+
+  try {
+    const groupEl = document.querySelector(`.sub-group[data-group-key="${groupKey}"]`);
+    if (!groupEl) return;
+
+    if (groupEl.classList.contains('collapsed')) {
+      collapsedGroups[groupKey] = false;
+      groupEl.classList.remove('collapsed');
+    }
+
+    const items = groupEl.querySelectorAll('.server-item');
+    const links = [];
+    items.forEach(item => {
+      links.push(item.dataset.link);
+      updateTcpLatencyUi(item.dataset.link, '...');
+    });
+
+    const results = await invoke('test_all_tcp_ping', { links });
+    const parsed = typeof results === 'string' ? JSON.parse(results) : results;
+
+    for (const [link, ms] of Object.entries(parsed)) {
+      updateTcpLatencyUi(link, ms);
+    }
+    // A partial or failed response never touches the links the backend did not answer for, so
+    // without this they sit on the "..." painted before the invoke forever -- indistinguishable
+    // from a test that is still running. Clearing every chip still showing the placeholder is
+    // also what makes a total failure read as finished rather than hung.
+    items.forEach(item => {
+      const latEl = document.getElementById(`tcp-latency-${hashCode(item.dataset.link)}`);
+      if (latEl && (latEl.textContent === '...' || latEl.textContent === 'Testing...')) {
+        updateTcpLatencyDisplay(latEl, -1);
+      }
+    });
+    log(t('log.tcp_ping_done'));
+  } catch (e) {
+    console.error('TCP ping test failed:', e);
+  } finally {
+    tcpTestingActive = false;
+  }
+}
+
+function updateTcpLatencyUi(link, ms) {
+  const el = document.getElementById(`tcp-latency-${hashCode(link)}`);
+  if (el) updateTcpLatencyDisplay(el, ms);
+}
+
+function updateTcpLatencyDisplay(el, ms) {
+  if (ms === null || ms === undefined || ms === '') {
+    el.textContent = '';
+    el.className = 'server-latency tcp';
+    return;
+  }
+
+  // The real-delay chip renders a failed test as "-1 ms"; here the numbers are small enough
+  // that a dash reads more clearly as "no result" than a negative latency would.
+  if (typeof ms === 'number') {
+    if (ms < 0) {
+      el.textContent = 'TCP —';
+      el.className = 'server-latency tcp red';
+    } else {
+      el.textContent = `TCP ${ms} ms`;
+      el.className = 'server-latency tcp ' + (ms < 500 ? 'green' : 'yellow');
+    }
+  } else {
+    el.textContent = 'TCP ...';
+    el.className = 'server-latency tcp';
+  }
+}
+
 async function clearData() {
+  const ok = confirm(t('settings.clear_data.confirm'));
+  if (!ok) return;
+
   try {
     await invoke('clear_data');
     selectedServerLink = null;
+    connectedServerLink = null;
     await refreshServerList();
-    log('All data cleared.');
+    await refreshSubscriptions();
+    await refreshRoutingRules();
+    await refreshStatsData();
+    await loadSettingsValues();
+    log(t('log.data_cleared'));
   } catch (e) {
-    log('Clear failed: ' + e);
+    log(t('log.clear_failed', null, {err: e}));
   }
 }
 
 // ===== TUN Toggle =====
 let isTunSwitching = false;
 
+// Puts the switch back where the backend actually has it. Every toggle flips the checkbox
+// optimistically, and several paths below can fail after the flip; without this the control
+// shows a mode the app never entered, and `get_tun_enabled` is otherwise read only once at
+// startup, so the disagreement outlives the window.
+async function syncTunSwitchFromBackend() {
+  try {
+    const enabled = await invoke('get_tun_enabled');
+    if (tunToggle) {
+      tunToggle.checked = !!enabled;
+      updateTunUIState();
+    }
+  } catch (_) {}
+}
+
 async function handleTunToggle() {
+  // The chip has no debounce of its own: each click dispatches a fresh `change`, and a mode
+  // switch costs up to the readiness window. A second click while the first is still in flight
+  // does not cancel it -- `switch_tun_mode` holds the reload lock for its whole run, so the two
+  // serialize and the second one kills a sidecar the first one only just started, over a link the
+  // user may have changed in between. Refusing the click is the only safe answer, and the flag is
+  // cleared on every way out below rather than at one site.
+  if (isTunSwitching) {
+    log(t('log.processing_ui'));
+    return;
+  }
+  isTunSwitching = true;
+  const done = () => { isTunSwitching = false; };
+
   const checked = tunToggle.checked;
   // Instantly update the visual micro-checkbox so the UI feels smooth and responsive
   updateTunUIState();
@@ -2095,7 +2554,7 @@ async function handleTunToggle() {
       const admin = await invoke('is_admin');
       if (!admin) {
         await invoke('toggle_tun', { enabled: true });
-        
+
         const overlay = document.createElement('div');
         overlay.style.position = 'fixed';
         overlay.style.top = '0'; overlay.style.left = '0';
@@ -2107,21 +2566,57 @@ async function handleTunToggle() {
         overlay.style.justifyContent = 'center';
         overlay.style.zIndex = '9999';
         overlay.style.backdropFilter = 'blur(4px)';
-        overlay.innerHTML = '<div style="text-align:center; padding: 20px; border-radius: 12px; background: var(--bg-secondary);"><h3>Administrator Required</h3><p style="margin-top: 10px; color: var(--text-secondary);">Restarting Vxray as Administrator to enable TUN Mode...</p></div>';
+        overlay.innerHTML = `<div style="text-align:center; padding: 20px; border-radius: 12px; background: var(--bg-secondary);"><h3>${t('tun.admin_required')}</h3><p style="margin-top: 10px; color: var(--text-secondary);">${t('tun.admin_required_desc')}</p></div>`;
         document.body.appendChild(overlay);
-        
-        setTimeout(() => invoke('restart_as_admin'), 3000);
+
+        // The restart is fired on a timer rather than awaited, so a refused UAC or a backend
+        // error rejects a promise nobody is watching and the sheet above is the last thing
+        // painted. Attach the catch here so the failure is visible instead of permanent: the
+        // overlay comes down, the switch goes back to the state the backend is actually in, and
+        // the dashboard is not left pinned on a spinner for a restart that will not happen.
+        setTimeout(() => {
+          invoke('restart_as_admin').catch((e) => {
+            log(t('log.tun_elevation_failed', null, {err: e}));
+            overlay.remove();
+            syncTunSwitchFromBackend();
+            if (isRunning || isConnecting) updateSmartDash('connected');
+          });
+        }, 3000);
+        done();
         return;
       }
-    } catch (_) {}
+    } catch (e) {
+      // `is_admin` itself can reject. Without this the toggle falls through to the plain
+      // invoke below and silently tries to enable TUN without the elevation it needs.
+      log(t('log.tun_admin_check_failed', null, {err: e}));
+      syncTunSwitchFromBackend();
+      done();
+      return;
+    }
   }
 
-  await invoke('toggle_tun', { enabled: checked });
+  try {
+    await invoke('toggle_tun', { enabled: checked });
+  } catch (e) {
+    // The switch was flipped optimistically at the top of this function. A rejected write
+    // leaves it showing the mode the backend never entered, and nothing else in the app
+    // re-reads the setting after startup, so the disagreement would survive until restart.
+    log(t('log.tun_toggle_failed', null, {err: e}));
+    syncTunSwitchFromBackend();
+    done();
+    return;
+  }
 
   // If connected, reconnect with new mode
   if (isRunning && connectedServerLink) {
     const modeStr = checked ? 'TUN' : 'System Proxy';
-    log(`Seamlessly switching to ${modeStr} mode...`);
+    log(t('log.switching_mode', null, {mode: modeStr}));
+    
+    const activeItem = document.querySelector(`.server-item[data-link="${connectedServerLink}"]`);
+    if (activeItem) {
+      activeItem.classList.remove('connected', 'failed', 'timeout');
+      activeItem.classList.add('processing');
+    }
     updateSmartDash('processing');
     try {
       const linkToReconnect = connectedServerLink;
@@ -2135,29 +2630,67 @@ async function handleTunToggle() {
         await invoke('switch_tun_mode', { tunMode: checked, link: linkToReconnect });
         
         if (!isRunning || connectedServerLink !== linkToReconnect) {
-            log('TUN switch aborted by user.');
+            log(t('log.tun_switch_aborted'));
+            isConnecting = false;
+            done();
             return;
         }
 
-        setTimeout(() => checkIp(true), 200);
-        
+        if (checked) {
+          // In TUN mode: keep processing state on both the slot and dashboard until checkIp verifies connectivity!
+          isConnecting = true;
+          isTunRouted = false;
+          updateSmartDash('processing');
+          if (activeItem) {
+            activeItem.classList.remove('connected', 'failed', 'timeout');
+            activeItem.classList.add('processing');
+          }
+        } else {
+          // Switched to proxy mode: system proxy is immediately active
+          isConnecting = false;
+          isTunRouted = true;
+          updateSmartDash('connected');
+          if (activeItem) {
+            activeItem.classList.remove('processing', 'failed', 'timeout');
+            activeItem.classList.add('connected');
+          }
+        }
+        done();
+
+        setTimeout(() => checkIp(true), 300);
+
         // Restart traffic tracking after seamless reconnect
         startTrafficTracking(linkToReconnect);
       } catch (e) {
-        log(`Connection failed during TUN switch: ${e}`);
+        if (errorTag(e) === 'log.tun_start_failed' || errorTag(e) === 'log.tun_adapter_unstable') {
+          await tunFellBackToProxy(linkToReconnect, e);
+          done();
+          return;
+        }
+        log(t('log.tun_switch_conn_failed', null, {err: e}));
+        isConnecting = false;
         disconnect();
       } finally {
         isConnectToLinkActive = false;
       }
     } catch (e) {
-      log(`TUN mode switch failed: ${e}`);
+      isConnecting = false;
+      log(t('log.tun_switch_failed', null, {err: e}));
       if (consecutivePingFailures >= 4) {
         updateSmartDash('timeout');
       } else {
         updateSmartDash('connected'); // Revert to connected on failure
       }
+      done();
     }
   }
+
+  // The two paths above that fall out of the reconnect block instead of returning -- a toggle while
+  // not connected, and a switch failure that is not the TUN-start fallback -- reach the end of the
+  // function without passing any of the done() calls above. Re-clearing here is a no-op on the
+  // paths that already cleared it, and it is the difference between a chip that recovers and one
+  // that stays dead for the rest of the session.
+  done();
 }
 
 // ===== Logs =====
@@ -2175,29 +2708,53 @@ function forceShowLogs() {
 
 function log(msg) {
   const line = document.createElement('div');
-  line.textContent = msg;
+  // A message the backend tagged is already a complete, translated sentence; resolving it
+  // here keeps every log() call site free of the tag protocol.
+  line.textContent = errorTag(msg) ? resolveTagged(msg) : msg;
   logViewer.appendChild(line);
   logViewer.scrollTop = logViewer.scrollHeight;
 }
 
 // ===== Clipboard =====
+// Fires the write and then confirms it, so the copy buttons do not look dead.
+let copyToastTimer = null;
+function showToast(msg) {
+  let toast = document.getElementById('copy-toast');
+  if (!toast) {
+    toast = document.createElement('div');
+    toast.id = 'copy-toast';
+    toast.className = 'copy-toast';
+    document.body.appendChild(toast);
+  }
+  toast.textContent = msg;
+  toast.classList.remove('show');
+  void toast.offsetWidth; // restart the entry transition on rapid re-copies
+  toast.classList.add('show');
+  clearTimeout(copyToastTimer);
+  copyToastTimer = setTimeout(() => toast.classList.remove('show'), 1800);
+}
+
 async function copyToClipboard(text) {
+  let ok = false;
   try {
     await invoke('copy_to_clipboard', { text });
+    ok = true;
   } catch (err) {
     console.warn('Native clipboard copy failed, falling back:', err);
     try {
       await navigator.clipboard.writeText(text);
+      ok = true;
     } catch (_) {
       // Fallback
       const ta = document.createElement('textarea');
       ta.value = text;
       document.body.appendChild(ta);
       ta.select();
-      document.execCommand('copy');
+      ok = document.execCommand('copy');
       document.body.removeChild(ta);
     }
   }
+  if (ok) showToast(t('common.copied'));
 }
 
 // ===== Helpers =====
@@ -2268,7 +2825,7 @@ function triggerPingTestShortcut() {
     // Only test the single server that was clicked/selected
     pingSingleItem(targetLink);
   } else {
-    log('Please click on a server to select it first.');
+    log(t('log.select_server_click'));
   }
 }
 
@@ -2293,7 +2850,7 @@ function showServerCopiedFeedback(itemOrLink) {
     const origText = nameEl.textContent;
 
     // Pure glowing animated typography (exact text "Copied Link", no capsule, no box, no checkmark)
-    nameEl.innerHTML = '<span class="copied-link-text">Copied Link</span>';
+    nameEl.innerHTML = `<span class="copied-link-text">${t('common.copied_link')}</span>`;
 
     setTimeout(() => {
       const textSpan = nameEl.querySelector('.copied-link-text');
@@ -2333,18 +2890,22 @@ async function triggerCopyShortcut() {
   if (targetLink) {
     await copyToClipboard(targetLink);
     showServerCopiedFeedback(targetItem || targetLink);
-    log('Server link copied to clipboard.');
+    log(t('log.link_copied'));
   } else {
-    log('Please click on a server to select it first.');
+    log(t('log.select_server_click'));
   }
 }
 
 // ===== Global Keyboard Shortcuts =====
+// The Persian layout labels these keys with Persian letters (V -> ر, C -> ز, R -> ق),
+// so the e.key comparisons need the Persian glyph to work on a Persian keyboard.
+// Written as escapes because the raw glyphs were once mangled into mojibake by a
+// bad codepage round-trip, and the escapes cannot decay that way.
 window.addEventListener('keydown', async (e) => {
   const isCtrlOrCmd = e.ctrlKey || e.metaKey;
-  const isKeyR = e.code === 'KeyR' || e.keyCode === 82 || e.which === 82 || (e.key && e.key.toLowerCase() === 'r') || e.key === 'Ù‚';
-  const isKeyV = e.code === 'KeyV' || e.keyCode === 86 || e.which === 86 || (e.key && e.key.toLowerCase() === 'v') || e.key === 'Ø±';
-  const isKeyC = e.code === 'KeyC' || e.keyCode === 67 || e.which === 67 || (e.key && e.key.toLowerCase() === 'c') || e.key === 'Ú˜' || e.key === 'Ø²';
+  const isKeyR = e.code === 'KeyR' || e.keyCode === 82 || e.which === 82 || (e.key && e.key.toLowerCase() === 'r') || e.key === 'ق';
+  const isKeyV = e.code === 'KeyV' || e.keyCode === 86 || e.which === 86 || (e.key && e.key.toLowerCase() === 'v') || e.key === 'ر';
+  const isKeyC = e.code === 'KeyC' || e.keyCode === 67 || e.which === 67 || (e.key && e.key.toLowerCase() === 'c') || e.key === 'ژ' || e.key === 'ز';
   const isF5 = e.key === 'F5' || e.keyCode === 116 || e.code === 'F5';
 
   // 1. Enter in subscription add input
@@ -2428,7 +2989,7 @@ async function handleGlobalPasteShortcut() {
       return;
     }
 
-    const { servers, subscriptions } = parseImportContent(text);
+    const { servers, subscriptions } = await parseImportContent(text);
     openImportModal();
     const textarea = document.getElementById('txt-import-content');
     if (textarea) {
@@ -2465,10 +3026,10 @@ async function refreshSubscriptions() {
 
     if (!subs || !Array.isArray(subs) || subs.length === 0) {
       listEl.innerHTML = `
-        <div style="text-align: center; padding: 48px 20px; color: var(--text-secondary); background: rgba(255,255,255,0.02); border: 1px dashed rgba(255,255,255,0.08); border-radius: 14px;">
+        <div style="text-align: center; padding: 48px 20px; color: var(--text-secondary); background: var(--ov-003); border: 1px dashed var(--ov-012); border-radius: 14px;">
           <svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" style="opacity: 0.4; margin-bottom: 10px;"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"></path><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"></path></svg>
-          <div style="font-size: 15px; font-weight: 600; color: #ffffff; margin-bottom: 4px;">No Subscriptions Added</div>
-          <div style="font-size: 12px; color: #888888;">Paste a subscription URL above and click Add to start managing your proxies.</div>
+          <div style="font-size: 15px; font-weight: 600; color: var(--text-strong); margin-bottom: 4px;">${t('subs.empty.title')}</div>
+          <div style="font-size: 12px; color: var(--text-faint);">${t('subs.empty.desc')}</div>
         </div>
       `;
       return;
@@ -2495,7 +3056,7 @@ async function refreshSubscriptions() {
         if (sub.expire) {
           const now = Math.floor(Date.now() / 1000);
           const days = Math.max(0, Math.floor((sub.expire - now) / 86400));
-          expireText = `<span class="sub-quota-expire">${days} days left</span>`;
+          expireText = `<span class="sub-quota-expire">${t('subs.days_left', null, {count: days, n: days})}</span>`;
         }
 
         quotaHtml = `
@@ -2515,8 +3076,8 @@ async function refreshSubscriptions() {
         quotaHtml = `
           <div class="sub-quota-box">
             <div class="sub-quota-header">
-              <span class="sub-quota-used">Unlimited Quota</span>
-              <span class="sub-quota-expire">${days} days left</span>
+              <span class="sub-quota-used">${t('subs.quota.unlimited')}</span>
+              <span class="sub-quota-expire">${t('subs.days_left', null, {count: days, n: days})}</span>
             </div>
           </div>
         `;
@@ -2533,32 +3094,32 @@ async function refreshSubscriptions() {
           <div class="sub-card-title-group">
             <h3 class="sub-card-title" title="${escapeHtml(sub.name || url)}">${escapeHtml(sub.name || url)}</h3>
             <div class="sub-badges">
-              <span class="sub-badge servers-badge">${sub.servers_count || 0} Servers</span>
-              ${sub.auto_update ? `<span class="sub-badge update-badge">Auto: ${sub.update_interval || 24}h</span>` : `<span class="sub-badge off-badge">Manual</span>`}
-              ${sub.pinned ? `<span class="sub-badge pin-badge">Pinned</span>` : ''}
+              <span class="sub-badge servers-badge">${t('common.servers_n', null, {count: sub.servers_count || 0, n: sub.servers_count || 0})}</span>
+              ${sub.auto_update ? `<span class="sub-badge update-badge">${t('subs.badge.auto_interval', null, {n: sub.update_interval || 24})}</span>` : `<span class="sub-badge off-badge">${t('subs.badge.manual')}</span>`}
+              ${sub.pinned ? `<span class="sub-badge pin-badge">${t('subs.badge.pinned')}</span>` : ''}
             </div>
           </div>
           <div class="sub-card-actions">
-            <button class="sub-act-btn btn-update" id="sub-update-btn-${hash}" title="Update Now" onclick="updateSingleSubscriptionCard('${url}', this)">
+            <button class="sub-act-btn btn-update" id="sub-update-btn-${hash}" title="${t('subs.tooltip.update_now')}" onclick="updateSingleSubscriptionCard('${url}', this)">
               <svg class="sub-act-svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"></polyline><polyline points="1 20 1 14 7 14"></polyline><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path></svg>
             </button>
-            <button class="sub-act-btn btn-stats-toggle" id="sub-stats-toggle-${hash}" title="Analytics & Daily Usage" onclick="toggleCardStats('${url}', this)">
+            <button class="sub-act-btn btn-stats-toggle" id="sub-stats-toggle-${hash}" title="${t('subs.tooltip.analytics')}" onclick="toggleCardStats('${url}', this)">
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 20V10M12 20V4M6 20v-6"></path></svg>
             </button>
-            <button class="sub-act-btn btn-edit" title="Edit Subscription" onclick='openEditSubModal("${url}", ${serializedSub})'>
+            <button class="sub-act-btn btn-edit" title="${t('modal.edit_sub.title')}" onclick='openEditSubModal("${url}", ${serializedSub})'>
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path></svg>
             </button>
-            <button class="sub-act-btn btn-delete" title="Delete Subscription" onclick="deleteSubscriptionFromTab('${url}')">
+            <button class="sub-act-btn btn-delete" title="${t('subs.tooltip.delete')}" onclick="deleteSubscriptionFromTab('${url}')">
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>
             </button>
           </div>
         </div>
 
         <div class="sub-card-body">
-          <div class="sub-url-row" onclick="copyToClipboard('${url}')" title="Click to copy subscription URL">
+          <div class="sub-url-row" onclick="copyToClipboard('${url}')" title="${t('subs.tooltip.copy_url')}">
             <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"></path><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"></path></svg>
             <span class="sub-url-text">${url}</span>
-            <span class="sub-copy-hint">Copy</span>
+            <span class="sub-copy-hint">${t('subs.copy_hint')}</span>
           </div>
           ${quotaHtml}
           ${sub.announcement ? `
@@ -2569,9 +3130,9 @@ async function refreshSubscriptions() {
                   <path d="M15.54 8.46a5 5 0 0 1 0 7.07"></path>
                   <path d="M19.07 4.93a10 10 0 0 1 0 14.14"></path>
                 </svg>
-                <span class="announcement-badge-label">ANNOUNCEMENT</span>
+                <span class="announcement-badge-label">${t('subs.badge.announcement')}</span>
               </span>
-              <span style="flex: 1; color: #ffffff;">${escapeHtml(sub.announcement)}</span>
+              <span style="flex: 1; color: var(--text-strong);">${escapeHtml(sub.announcement)}</span>
               <span class="announcement-live-dot"></span>
             </div>
           ` : ''}
@@ -2581,20 +3142,24 @@ async function refreshSubscriptions() {
         <div class="sub-card-stats-drawer" id="stats-drawer-${hash}" style="display: none;">
           <div class="sub-stats-metrics">
             <div class="sub-metric-card">
-              <span class="sub-metric-label">Client Usage</span>
+              <span class="sub-metric-label">${t('subs.metric.client_usage')}</span>
               <span class="sub-metric-value" id="client-usage-${hash}">${formatBytes(sub.stats?.total_used || 0)}</span>
             </div>
             <div class="sub-metric-card">
-              <span class="sub-metric-label">Avg Ping</span>
+              <span class="sub-metric-label">${t('subs.metric.client_upload')}</span>
+              <span class="sub-metric-value" id="client-upload-${hash}">${formatBytes(sub.stats?.total_upload || 0)}</span>
+            </div>
+            <div class="sub-metric-card">
+              <span class="sub-metric-label">${t('subs.metric.avg_ping')}</span>
               <span class="sub-metric-value">${avgPing}</span>
             </div>
             <div class="sub-metric-card">
-              <span class="sub-metric-label">Remaining Data</span>
+              <span class="sub-metric-label">${t('subs.metric.remaining_data')}</span>
               <span class="sub-metric-value">${remainingQuotaText}</span>
             </div>
             <div class="sub-metric-card">
-              <span class="sub-metric-label">Auto Update</span>
-              <span class="sub-metric-value">${sub.auto_update ? sub.update_interval + 'h' : 'Manual'}</span>
+              <span class="sub-metric-label">${t('edit_sub.auto_update')}</span>
+              <span class="sub-metric-value">${sub.auto_update ? sub.update_interval + 'h' : t('subs.badge.manual')}</span>
             </div>
           </div>
           <div class="sub-stats-chart-wrapper">
@@ -2675,15 +3240,26 @@ function copyCurrentEditUrl() {
       const span = btn.querySelector('span');
       if (span) {
         const orig = span.textContent;
-        span.textContent = 'Copied!';
+        span.textContent = t('common.copied');
         setTimeout(() => span.textContent = orig, 1500);
       }
     }
   }
 }
 
+// An IP or a CIDR range is not a hostname: the stripping below would turn "192.168.1.1:80"
+// into "192.168.1" and "10.0.0.0/8" into "10", both of which match nothing and read exactly
+// like a working rule. Anything that parses as an address is handed through untouched.
+function looksLikeAddress(p) {
+    if (/^\d{1,3}(\.\d{1,3}){3}$/.test(p)) return true;         // 192.168.1.1
+    if (/^\d{1,3}(\.\d{1,3}){3}\/\d{1,2}$/.test(p)) return true; // 10.0.0.0/8
+    if (/^[0-9a-fA-F:]+$/.test(p) && p.includes(':')) return true; // IPv6, ::/0
+    return false;
+}
+
 function cleanRoutingPattern(raw) {
     let p = raw.trim();
+    if (looksLikeAddress(p)) return p;
     // Strip protocol
     p = p.replace(/^https?:\/\//i, '');
     // Strip trailing slashes and paths
@@ -2695,10 +3271,24 @@ function cleanRoutingPattern(raw) {
     return p;
 }
 
-function handleAddRoutingRule() {
-    const rawPattern = document.getElementById('txt-rule-pattern').value;
-    const action = document.getElementById('select-rule-action').value;
+// Each section has its own input, so the action comes from the section the user is
+// typing into rather than from a dropdown that can disagree with the visible list.
+function handleAddRoutingRule(action) {
+    const inputId = action === 'proxy' ? 'txt-proxy-pattern' : 'txt-bypass-pattern';
+    const rawPattern = document.getElementById(inputId).value;
     if (!rawPattern.trim()) return;
+    // An executable pasted into the domain box is a process rule. The backend reclassifies it
+    // too, but going through cleanRoutingPattern first would destroy the path, and the row
+    // would render in the domain list instead of the application list. Hand the path to the
+    // exe box and let the normal handler run -- it owns the optimistic row and the in-flight
+    // guard, which this path needs for the same reasons the picker does.
+    if (/\.exe$/i.test(rawPattern.trim())) {
+      const exeInput = document.getElementById('txt-' + action + '-exe');
+      if (exeInput) exeInput.value = rawPattern.trim();
+      document.getElementById(inputId).value = '';
+      handleAddProcessRule(action);
+      return;
+    }
     const pattern = cleanRoutingPattern(rawPattern);
     if (!pattern) return;
     const rule = {
@@ -2707,10 +3297,10 @@ function handleAddRoutingRule() {
       action: action,
       enabled: true,
     };
-    invoke('add_routing_rule', { rule: rule }).then(() => {
-        document.getElementById('txt-rule-pattern').value = '';
+    invoke('add_routing_rule', { rule: rule }).then((reloaded) => {
+        document.getElementById(inputId).value = '';
         refreshRoutingRules();
-        if(window.restartConnectionIfActive) window.restartConnectionIfActive();
+        if(!reloaded && window.restartConnectionIfActive) window.restartConnectionIfActive();
     }).catch(e => console.error(e));
 }
 
@@ -2725,18 +3315,713 @@ function switchSettingsTab(tabId) {
   document.querySelectorAll('#page-settings .settings-pane').forEach(pane => {
     pane.classList.remove('active');
   });
-  
-  // Find the clicked button by matching its text content
+
+  // Match on data-tab, not textContent -- the label is translated, so a text match
+  // breaks the moment the language changes.
   document.querySelectorAll('.settings-tab-btn').forEach(btn => {
-    if (btn.textContent.toLowerCase() === tabId) {
+    if (btn.getAttribute('data-tab') === tabId) {
       btn.classList.add('active');
     }
   });
   const pane = document.getElementById('settings-' + tabId);
   if (pane) pane.classList.add('active');
+
+  // The support tab's content is fetched on first open rather than at startup: probing
+  // the cores for their versions and hitting GitHub belong on demand, not on launch.
+  if (tabId === 'support') onSupportTabOpen();
+}
+
+// ===== App & Support: update center =====
+//
+// The UI half of core/update.rs. The backend owns the network and the handover to the
+// installer; this owns the states the user sees -- nothing checked yet, checking, up to
+// date, an update waiting, or the check failed -- plus the download progress bar.
+
+let lastUpdateInfo = null;       // result of the most recent check_for_updates
+let updateChecking = false;
+let updateDownloading = false;
+let updateCheckError = null;     // only set when a check the user asked for failed
+let downloadedInstallerPath = null;
+let updateProgressUnlisten = null;
+let appVersion = '';
+let systemInfoLoaded = false;
+let lastSystemInfo = null;
+
+function formatBytes(bytes) {
+  const n = Number(bytes) || 0;
+  if (n <= 0) return '0 MB';
+  const mb = n / (1024 * 1024);
+  return mb < 10 ? mb.toFixed(1) + ' MB' : Math.round(mb) + ' MB';
+}
+
+// Only a check the user triggered gets to put an error on screen. The startup probe is
+// best-effort and must stay invisible when the network will not cooperate.
+
+// A click that lands while a check is already running used to be dropped outright, leaving the
+// card pulsing and no amount of clicking able to change it. The intent is latched and replayed
+// when the in-flight check lands.
+let updatePendingManual = false;
+
+async function checkForUpdates(manual) {
+  if (updateChecking) {
+    if (manual) updatePendingManual = true;
+    return;
+  }
+  updateChecking = true;
+  updateCheckError = null;
+
+  const btn = document.getElementById('btn-check-updates');
+  const label = document.getElementById('support-check-label');
+  // Only a check the user asked for owns the button. The startup probe used to disable it and
+  // relabel it for up to thirty seconds, so on a network that will not answer the control sat
+  // there greyed out and unresponsive, reading as "stuck on checking".
+  if (manual) {
+    if (btn) { btn.disabled = true; btn.classList.add('spinning'); }
+    if (label) { label.textContent = t('support.checking'); label.dir = 'auto'; }
+  }
+  if (manual) renderUpdateCard();
+
+  try {
+    lastUpdateInfo = await invoke('check_for_updates');
+  } catch (e) {
+    if (manual) {
+      updateCheckError = (e && e.message) ? e.message : String(e);
+      lastUpdateInfo = null;
+    } else {
+      console.error('silent update check failed:', e);
+    }
+  } finally {
+    updateChecking = false;
+    if (btn) { btn.disabled = false; btn.classList.remove('spinning'); }
+    if (label) { label.textContent = t('support.check_button'); label.dir = 'auto'; }
+
+    const available = !!(lastUpdateInfo && lastUpdateInfo.update_available);
+    setUpdateBadges(available);
+    // Repaint regardless of who asked. Gating this on `manual || available` left the card
+    // pulsing forever after a silent check came back empty: opening the tab had already painted
+    // the checking state, and nothing in that branch ever replaced it.
+    renderUpdateCard();
+
+    if (updatePendingManual) {
+      updatePendingManual = false;
+      checkForUpdates(true);
+    }
+  }
+}
+
+// Lights the dot on the Settings nav item and the pill on the tab itself. Both stay live
+// across the app, not just on the support tab, so a pending release is never hidden.
+function setUpdateBadges(visible) {
+  const nav = document.getElementById('nav-update-badge');
+  const tab = document.getElementById('support-tab-update-badge');
+  if (nav) nav.style.display = visible ? '' : 'none';
+  if (tab) tab.style.display = visible ? '' : 'none';
+}
+
+async function renderSupportVersion() {
+  if (!appVersion) {
+    try { appVersion = await invoke('get_app_version'); } catch (e) { return; }
+  }
+  const el = document.getElementById('support-current-version');
+  if (el) {
+    el.textContent = t('support.hero.version_badge', null, { version: appVersion });
+    el.dir = 'auto';
+  }
+}
+
+// Rebuilds the state card from whatever the last check returned. The card is one element
+// that swaps its look by class. Release notes are the one piece of remote content here;
+// they are assigned as textContent rather than innerHTML, which is what stops a stray tag
+// in a GitHub markdown body from ever executing.
+function renderUpdateCard() {
+  const card = document.getElementById('support-update-card');
+  if (!card) return;
+
+  const leaf = (text, extra) => {
+    const s = document.createElement('span');
+    s.textContent = text;
+    s.dir = 'auto';
+    if (extra) for (const k in extra) s.classList.add(extra[k]);
+    return s;
+  };
+
+  const reset = (cls) => {
+    card.className = 'support-card ' + cls;
+    card.innerHTML = '';
+    return card;
+  };
+
+  if (updateChecking) {
+    reset('checking');
+    const head = document.createElement('div');
+    head.className = 'support-card-head';
+    head.appendChild(Object.assign(document.createElement('span'), { className: 'support-status-dot' }));
+    head.appendChild(leaf(t('support.checking'), ['support-card-title']));
+    card.appendChild(head);
+    return;
+  }
+
+  if (updateCheckError) {
+    reset('failed');
+    const head = document.createElement('div');
+    head.className = 'support-card-head';
+    head.appendChild(Object.assign(document.createElement('span'), { className: 'support-status-dot' }));
+    head.appendChild(leaf(t('support.check_failed'), ['support-card-title']));
+    card.appendChild(head);
+    card.appendChild(leaf(updateCheckError, ['support-card-desc']));
+    return;
+  }
+
+  if (!lastUpdateInfo) { reset('empty'); return; }
+
+  if (!lastUpdateInfo.update_available) {
+    reset('up-to-date');
+    const head = document.createElement('div');
+    head.className = 'support-card-head';
+    head.appendChild(Object.assign(document.createElement('span'), { className: 'support-status-dot' }));
+    head.appendChild(leaf(t('support.up_to_date'), ['support-card-title']));
+    card.appendChild(head);
+    card.appendChild(leaf(t('support.up_to_date_desc'), ['support-card-desc']));
+
+    // The button is only offered here, when the installed version is the latest one, because
+    // the notes for a pending release are already shown in the card above.
+    //
+    // `lastUpdateInfo` describes the *latest* GitHub release, which is not necessarily this
+    // build: between a build and its release the installed version runs ahead of what has
+    // been published, and reusing those notes would answer "what's new in 2.1" with 2.0's
+    // changelog. The notes are fetched for the version the card actually names, on demand --
+    // the anonymous API is rate-limited hard enough that fetching them on every tab open
+    // would be the difference between a button that works and one that rate-limits.
+    const myVersion = (lastUpdateInfo.current_version || '').trim();
+    if (myVersion) {
+      const actions = document.createElement('div');
+      actions.className = 'support-card-actions';
+      const btn = document.createElement('button');
+      btn.className = 'support-gh-btn';
+      btn.type = 'button';
+      btn.textContent = t('support.patch_notes');
+      btn.dir = 'auto';
+      // Toggle rather than navigate: the notes belong with the rest of the card, and a panel here
+      // reuses the exact styling the available-update branch already paints its notes with.
+      btn.addEventListener('click', async () => {
+        const existing = card.querySelector('.support-notes');
+        if (existing) {
+          existing.remove();
+          return;
+        }
+        const box = document.createElement('div');
+        box.className = 'support-notes';
+        box.dir = 'auto';
+        card.appendChild(box);
+        try {
+          // A version that has not been published yet has no notes on GitHub; the backend
+          // reports that as an empty string rather than an error, and an empty body is the
+          // same as no button at all.
+          const notes = (await invoke('get_release_notes', { version: myVersion }) || '').trim();
+          // Remote content: assigned, never parsed as markup.
+          box.textContent = notes || t('support.no_patch_notes');
+        } catch (err) {
+          box.textContent = t('support.no_patch_notes');
+        }
+      });
+      actions.appendChild(btn);
+      card.appendChild(actions);
+    }
+    return;
+  }
+
+  reset('available');
+  const tag = lastUpdateInfo.latest_version.replace(/^v+/i, '');
+
+  const head = document.createElement('div');
+  head.className = 'support-card-head';
+  head.appendChild(Object.assign(document.createElement('span'), { className: 'support-status-dot' }));
+  head.appendChild(leaf(t('support.update_available_title', null, { version: tag }), ['support-card-title']));
+  card.appendChild(head);
+  card.appendChild(leaf(t('support.update_available_desc'), ['support-card-desc']));
+
+  const notes = (lastUpdateInfo.release_notes || '').trim();
+  if (notes) {
+    card.appendChild(leaf(t('support.release_notes'), ['support-notes-title']));
+    const box = document.createElement('div');
+    box.className = 'support-notes';
+    box.dir = 'auto';
+    box.textContent = notes;
+    card.appendChild(box);
+  }
+
+  const actions = document.createElement('div');
+  actions.className = 'support-card-actions';
+
+  if (lastUpdateInfo.download_url) {
+    const dl = document.createElement('button');
+    dl.className = 'support-download-btn';
+    dl.textContent = updateDownloading ? t('support.downloading') : t('support.download_install');
+    dl.dir = 'auto';
+    dl.disabled = updateDownloading;
+    dl.addEventListener('click', () => startUpdateDownload());
+    actions.appendChild(dl);
+  } else {
+    card.appendChild(leaf(t('support.no_installer'), ['support-card-desc']));
+  }
+
+  const gh = document.createElement('button');
+  gh.className = 'support-gh-btn';
+  gh.textContent = t('support.view_release');
+  gh.dir = 'auto';
+  gh.addEventListener('click', () => openSupportUrl(lastUpdateInfo.release_url));
+  actions.appendChild(gh);
+  card.appendChild(actions);
+}
+
+async function startUpdateDownload() {
+  if (updateDownloading || !lastUpdateInfo || !lastUpdateInfo.download_url) return;
+  updateDownloading = true;
+  renderUpdateCard();
+
+  const wrap = document.getElementById('support-progress-wrap');
+  const fill = document.getElementById('support-progress-fill');
+  const pct = document.getElementById('support-progress-percent');
+  const size = document.getElementById('support-progress-size');
+  const label = document.getElementById('support-progress-label');
+  const installRow = document.getElementById('support-install-row');
+
+  if (fill) fill.style.width = '0%';
+  if (pct) pct.textContent = '0%';
+  if (size) size.textContent = '';
+  if (label) { label.textContent = t('support.downloading'); label.dir = 'auto'; label.classList.remove('error'); }
+  if (installRow) installRow.classList.remove('visible');
+  if (wrap) wrap.classList.add('visible');
+
+  // Percent events come from the backend as it streams; only the newest subscription is
+  // wanted, so the previous listener is dropped before attaching a new one.
+  try {
+    if (updateProgressUnlisten) { updateProgressUnlisten(); updateProgressUnlisten = null; }
+    updateProgressUnlisten = await window.__TAURI__.event.listen('update-download-progress', (e) => {
+      const p = (e && e.payload) || {};
+      const pc = Math.max(0, Math.min(100, Math.round(p.percent || 0)));
+      if (fill) fill.style.width = pc + '%';
+      if (pct) pct.textContent = pc + '%';
+      if (size) {
+        size.textContent = p.total > 0
+          ? formatBytes(p.downloaded) + ' / ' + formatBytes(p.total)
+          : formatBytes(p.downloaded);
+      }
+    });
+  } catch (e) {
+    console.error('could not subscribe to download progress:', e);
+  }
+
+  try {
+    downloadedInstallerPath = await invoke('download_update', { url: lastUpdateInfo.download_url });
+    if (wrap) wrap.classList.remove('visible');
+    if (installRow) installRow.classList.add('visible');
+    const ready = document.getElementById('support-ready-text');
+    if (ready) { ready.classList.remove('error'); ready.dir = 'auto'; }
+  } catch (e) {
+    // A failed download is not a failed check: keep the card in its "available" state so
+    // the button is live for a retry, and put the reason where the bar was.
+    console.error('update download failed:', e);
+    if (label) {
+      label.textContent = (e && e.message) ? e.message : String(e);
+      label.classList.add('error');
+    }
+  } finally {
+    if (updateProgressUnlisten) { updateProgressUnlisten(); updateProgressUnlisten = null; }
+    updateDownloading = false;
+    renderUpdateCard();
+  }
+}
+
+// Hands the finished installer to the OS and quits; the backend clears the proxy and the
+// cores first, so nothing after this call runs in this process.
+async function installDownloadedUpdate() {
+  if (!downloadedInstallerPath) return;
+  const btn = document.getElementById('btn-restart-install');
+  if (btn) { btn.disabled = true; }
+  try {
+    await invoke('install_update', { path: downloadedInstallerPath });
+  } catch (e) {
+    // Success never returns: the process hands over to the installer and quits. Reaching
+    // here means the handover itself was refused, so put the reason where the prompt was
+    // and leave the button live for another attempt.
+    console.error('install handover failed:', e);
+    if (btn) { btn.disabled = false; }
+    const ready = document.getElementById('support-ready-text');
+    if (ready) {
+      ready.textContent = (e && e.message) ? e.message : String(e);
+      ready.classList.add('error');
+    }
+  }
+}
+
+function openSupportUrl(url) {
+  invoke('open_external_url', { url }).catch(e => console.error('could not open url:', e));
+}
+
+// ===== App & Support: system & engine =====
+
+function onSupportTabOpen() {
+  renderSupportVersion();
+  renderUpdateCard();
+  if (!systemInfoLoaded) loadSystemInfo();
+}
+
+async function loadSystemInfo() {
+  ['sysinfo-app', 'sysinfo-os', 'sysinfo-core'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.textContent = '…';
+  });
+  try {
+    lastSystemInfo = await invoke('get_system_info');
+    systemInfoLoaded = true;
+    renderSystemInfo();
+  } catch (e) {
+    console.error('could not read system info:', e);
+    ['sysinfo-app', 'sysinfo-os', 'sysinfo-core'].forEach(id => {
+      const el = document.getElementById(id);
+      if (el) el.textContent = t('support.sysinfo.unknown');
+    });
+  }
+}
+
+function renderSystemInfo() {
+  if (!lastSystemInfo) return;
+  const set = (id, text) => {
+    const el = document.getElementById(id);
+    if (el) { el.textContent = text; el.dir = 'auto'; }
+  };
+  set('sysinfo-app', lastSystemInfo.app_version || t('support.sysinfo.unknown'));
+  set('sysinfo-os', lastSystemInfo.os_name + ' (' + lastSystemInfo.os_arch + ')');
+  const sb = lastSystemInfo.singbox_version || t('support.sysinfo.unknown');
+  const xr = lastSystemInfo.xray_version || t('support.sysinfo.unknown');
+  set('sysinfo-core', 'Sing-Box ' + sb + ' • Xray ' + xr);
+}
+
+function copySystemInfo() {
+  if (!lastSystemInfo) return;
+  const unknown = t('support.sysinfo.unknown');
+  const text = [
+    'Vxray — system info',
+    'App version: ' + (lastSystemInfo.app_version || unknown),
+    'OS: ' + lastSystemInfo.os_name + ' (' + lastSystemInfo.os_arch + ')',
+    'Selected core: ' + (lastSystemInfo.core_type || 'auto'),
+    'Sing-Box: ' + (lastSystemInfo.singbox_version || unknown),
+    'Xray: ' + (lastSystemInfo.xray_version || unknown)
+  ].join('\n');
+  invoke('copy_to_clipboard', { text }).then(() => {
+    const btn = document.getElementById('btn-copy-sysinfo');
+    if (btn) {
+      btn.textContent = t('support.sysinfo.copied');
+      btn.dir = 'auto';
+      setTimeout(() => { btn.textContent = t('support.sysinfo.copy'); }, 1600);
+    }
+  }).catch(e => console.error('clipboard write failed:', e));
 }
 
 // ===== Routing Preset Listeners =====
+
+// Swaps which custom-rules list is on screen. Presentational only: it never invokes the
+// core, never restarts the connection, and both panes keep their rules regardless of
+// which is showing. The Proxy-Only toggle remains the single thing that changes routing.
+// Buttons are matched on data-rtab rather than their label, because the label is
+// translated and would break matching in any non-English language.
+function switchRoutingTab(tabId) {
+  document.querySelectorAll('.routing-tab-btn').forEach(btn => btn.classList.remove('active'));
+  document.querySelectorAll('.routing-pane').forEach(pane => pane.classList.remove('active'));
+  document.querySelectorAll('.routing-tab-btn').forEach(btn => {
+    if (btn.getAttribute('data-rtab') === tabId) btn.classList.add('active');
+  });
+  const pane = document.getElementById('routing-pane-' + tabId);
+  if (pane) pane.classList.add('active');
+  // A sub-pane only displays while it holds `active`, and switching sub-tabs takes that class
+  // off the half being left. Without restoring the mode's remembered half here, the pane would
+  // come up empty -- the app list a user had just filled in would look like it had vanished,
+  // and would only come back after clicking the sub-tab they were already on.
+  switchRoutingSubTab(tabId, routingSubTab[tabId] || 'domains');
+  // Each mode describes itself; the paragraph above the tabs follows the selection.
+  const desc = document.getElementById('routing-mode-desc');
+  if (desc) {
+    const key = tabId === 'proxy' ? 'routing.mode.proxy_only.desc' : 'routing.mode.bypass.desc';
+    desc.dataset.i18n = key;
+    desc.textContent = t(key);
+    desc.dir = 'auto';
+  }
+}
+
+// Sub-tabs live inside one mode and only ever select which half of that mode is showing.
+// `routingSubTab` is remembered per mode, so leaving and coming back returns to the half
+// you were on instead of always resetting to Domains.
+const routingSubTab = { bypass: 'domains', proxy: 'domains' };
+
+function switchRoutingSubTab(mode, subTab) {
+  routingSubTab[mode] = subTab;
+  document.querySelectorAll('.routing-subtab-btn[data-rsubfor="' + mode + '"]')
+    .forEach(btn => btn.classList.toggle('active', btn.getAttribute('data-rsub') === subTab));
+  // Only this mode's two halves are touched. Clearing every sub-pane on the page -- which a
+  // bare querySelectorAll('.routing-subpane') does -- also strips the other mode's open half,
+  // and nothing ever gave it back, so visiting Applications under one mode blanked the other
+  // mode's pane until you re-clicked its sub-tab.
+  ['domains', 'apps'].forEach(s => {
+    const sub = document.getElementById('routing-sub-' + mode + '-' + s);
+    if (sub) sub.classList.toggle('active', s === subTab);
+  });
+  if (subTab === 'apps') loadRecommendedApps(mode);
+}
+
+// Not every install has a recommended app, and the scan walks the registry, so it runs
+// the first time either Applications half is opened rather than at startup.
+const recommendedLoaded = { bypass: false, proxy: false };
+let recommendedCache = null;
+let recommendedScan = null;
+
+// The scan is slow and its result does not depend on the mode, so one in-flight promise
+// serves both halves. Rendering from a cache that is still null is what made the chips
+// vanish: any rules refresh landing during the scan repainted them from an empty list and
+// nothing ever put them back, so the Applications half looked broken until a restart.
+//
+// The previous launch's result is read from disk first so the pane paints immediately; the
+// fresh scan then swaps in whatever has changed. Without the disk read the half is empty for
+// the seconds the scan takes on every open.
+function scanRecommendedApps() {
+  if (recommendedScan) return recommendedScan;
+  recommendedScan = invoke('cached_installed_apps')
+    .catch(e => {
+      console.error('Failed to read the cached app list:', e);
+      return null;
+    })
+    .then(cached => {
+      if (cached && cached.length) {
+        recommendedCache = cached;
+        repaintRecommended();
+      }
+    })
+    .then(() => invoke('detect_installed_apps').catch(e => {
+      console.error('Failed to detect installed apps:', e);
+      return [];
+    }))
+    .then(apps => {
+      recommendedCache = apps;
+      repaintRecommended();
+      return apps;
+    });
+  return recommendedScan;
+}
+
+// Paints whatever the scan has so far into the halves the user has already opened. A half
+// that was never visited stays empty rather than flashing content into a hidden pane.
+function repaintRecommended() {
+  ['bypass', 'proxy'].forEach(mode => {
+    if (!recommendedLoaded[mode]) return;
+    const host = document.getElementById(mode + '-recommended');
+    if (!host) return;
+    if (recommendedCache) renderRecommendedInto(host, mode, recommendedCache);
+    else renderRecommendedPlaceholder(host);
+  });
+}
+
+function renderRecommendedPlaceholder(host) {
+  host.innerHTML = '';
+  const ph = document.createElement('span');
+  ph.className = 'routing-recommended-label routing-scanning';
+  ph.textContent = t('routing.apps.scanning');
+  ph.dir = 'auto';
+  host.appendChild(ph);
+}
+
+async function loadRecommendedApps(mode) {
+  const host = document.getElementById(mode + '-recommended');
+  if (!host) return;
+  if (!recommendedLoaded[mode]) {
+    recommendedLoaded[mode] = true;
+    renderRecommendedPlaceholder(host);
+    scanRecommendedApps();
+    return;
+  }
+  // Coming back to a half that finished scanning while it was hidden.
+  repaintRecommended();
+}
+
+// The scan's result does not depend on the mode, so both halves are primed once at startup
+// rather than on first visit. Loading only the half a user happened to open first left the
+// other one empty, which read as "proxy-only mode does not suggest any applications" -- the
+// chips are there, they were simply never fetched for that half.
+function primeRecommendedApps() {
+  if (recommendedScan) return;
+  ['bypass', 'proxy'].forEach(mode => {
+    recommendedLoaded[mode] = true;
+    const host = document.getElementById(mode + '-recommended');
+    if (host) renderRecommendedPlaceholder(host);
+  });
+  scanRecommendedApps();
+}
+
+function renderRecommendedInto(host, mode, apps) {
+  host.innerHTML = '';
+  if (!apps.length) return;
+
+  const label = document.createElement('span');
+  label.className = 'routing-recommended-label';
+  label.textContent = t('routing.apps.recommended');
+  label.dir = 'auto';
+  host.appendChild(label);
+
+  // Already-added rules read as "Added" chips, so the recommendation does not offer the
+  // same .exe twice.
+  const existing = (window.__vxrayProcessRules || {})[mode] || [];
+
+  apps.forEach(app => {
+    const chip = document.createElement('button');
+    chip.className = 'routing-rec-chip';
+    chip.type = 'button';
+    const isAdded = existing.some(p => sameExePath(p, app.exe_path));
+
+    const initial = (app.name.trim()[0] || '?').toUpperCase();
+    chip.innerHTML =
+      '<span class="routing-rec-avatar" aria-hidden="true">' + escapeHtml(initial) + '</span>' +
+      '<span class="routing-rec-name">' + escapeHtml(app.name) + '</span>' +
+      '<span class="routing-rec-state">' + (isAdded ? t('routing.apps.added') : '+') + '</span>';
+    chip.title = app.exe_path;
+    if (isAdded) chip.classList.add('added');
+    else chip.addEventListener('click', () => addProcessRule(mode, app.exe_path, chip));
+    host.appendChild(chip);
+  });
+}
+
+// The duplicate check only needs to recognise the same install twice, and the catalog
+// stores full paths, so it compares those -- case and slash direction are the only things
+// that differ between the same file written two ways.
+function sameExePath(a, b) {
+  return (a || '').toLowerCase().replace(/\//g, '\\') === (b || '').toLowerCase().replace(/\//g, '\\');
+}
+
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+
+// The picker is the primary path; the text box next to it is the escape hatch for a path
+// the catalog missed.
+async function browseExecutable(mode) {
+  try {
+    const path = await invoke('browse_executable');
+    if (!path) return; // cancel
+    // The ids in index.html are "txt-bypass-exe" / "txt-proxy-exe". This used to look them up
+    // without the "txt-" prefix, so the picked path was written to a null element and the
+    // button did nothing at all.
+    const el = document.getElementById('txt-' + mode + '-exe');
+    if (el) el.value = path;
+  } catch (e) {
+    console.error('Failed to pick an executable:', e);
+  }
+}
+
+function handleAddProcessRule(mode) {
+  const inputId = 'txt-' + mode + '-exe';
+  const el = document.getElementById(inputId);
+  const raw = (el && el.value || '').trim();
+  if (!raw) return;
+  addProcessRule(mode, raw);
+}
+
+// Adding is an async round trip that restarts the adapter, so a second click before the first
+// one settles used to fire a second sidecar alongside the first. The two then fought over the
+// "Vxray" interface and the loser exited, which is the "the app crashes when I add an app"
+// report -- the guard stops the second click rather than racing it.
+let processRuleAddInFlight = false;
+
+// Paints one app row before the backend round trip, so the list reacts the moment the user
+// clicks instead of after the adapter restart settles. The markup mirrors
+// renderProcessRulesInto; refreshRoutingRules replaces it with the persisted row once the save
+// lands, and a failed save removes it again, so the optimistic row can never outlive the truth.
+function paintPendingAppRow(mode, exePath) {
+  const listEl = document.getElementById(mode + '-apps-list');
+  if (!listEl) return null;
+  // An empty list shows its placeholder; a pending row has to displace it or the two stack.
+  const placeholder = listEl.querySelector('.routing-empty-hint');
+  if (placeholder) placeholder.remove();
+
+  const fileName = exePath.split('\\').pop().split('/').pop() || exePath;
+  const initial = (fileName.trim()[0] || '?').toUpperCase();
+  const item = document.createElement('div');
+  item.className = 'routing-rule-item routing-app-item';
+  item.dataset.pending = '1';
+  item.innerHTML = `
+    <div style="display: flex; align-items: center; gap: 10px; flex: 1; overflow: hidden;">
+      <span class="routing-app-icon" aria-hidden="true">${escapeHtml(initial)}</span>
+      <span style="display: flex; flex-direction: column; min-width: 0; flex: 1;">
+        <span class="routing-rule-pattern routing-app-name">${escapeHtml(fileName)}</span>
+        <span class="routing-app-path">${escapeHtml(exePath)}</span>
+      </span>
+    </div>
+    <div style="display: flex; align-items: center; gap: 8px; flex-shrink: 0;">
+      <span class="routing-app-pending">${t('routing.apps.adding')}</span>
+    </div>
+  `;
+  listEl.appendChild(item);
+  return item;
+}
+
+function addProcessRule(mode, exePath, chip) {
+  if (processRuleAddInFlight) return;
+  // An .exe path is never a domain, so it must not go through cleanRoutingPattern --
+  // that helper strips ports, paths and drive letters and would destroy the value.
+  if (!/\.exe$/i.test(exePath)) {
+    console.error('Refusing to add a non-executable process rule:', exePath);
+    return;
+  }
+  processRuleAddInFlight = true;
+  if (chip) chip.disabled = true;
+
+  // The row appears now, and the status capsule shows the adapter restart the backend is about
+  // to perform -- without either, "add" looks like it did nothing for the second or two the
+  // reload takes, which is the "the app freezes and I cannot add another" report.
+  const pendingRow = paintPendingAppRow(mode, exePath);
+  const wasRunning = isRunning;
+  if (wasRunning) updateSmartDash('processing');
+
+  const rule = {
+    id: 'rule_' + Date.now() + '_' + Math.random().toString(36).substr(2, 5),
+    pattern: exePath,
+    action: mode,           // "bypass" or "proxy" -- the pane it was added from
+    kind: 'process',
+    enabled: true,
+  };
+  invoke('add_routing_rule', { rule: rule }).then((reloaded) => {
+    const el = document.getElementById('txt-' + mode + '-exe');
+    if (el) el.value = '';
+    if (chip) {
+      chip.classList.add('added');
+      const state = chip.querySelector('.routing-rec-state');
+      if (state) state.textContent = t('routing.apps.added');
+      chip.disabled = true;
+    }
+    refreshRoutingRules();
+    // The adapter restart finished, so the capsule can leave its processing state. Restoring
+    // here rather than waiting on the health poll is what keeps it from sitting on a spinner
+    // after the tunnel is already back up.
+    if (wasRunning) updateSmartDash('connected');
+    // An application rule is pushed into the running TUN sidecar or core by the backend, which
+    // restarts only the adapter. Do NOT reconnect here on top of it: connect keeps a live TUN
+    // sidecar in place, so a reconnect would neither apply the rule nor help -- it would just
+    // make adding an app as slow as switching servers.
+    if (!reloaded && window.restartConnectionIfActive) window.restartConnectionIfActive();
+  }).catch(e => {
+    console.error(e);
+    // The rule never landed, so hand the chip back to the user instead of leaving it stuck
+    // disabled on a failure it cannot see.
+    if (pendingRow) pendingRow.remove();
+    if (chip) {
+      chip.disabled = false;
+      chip.classList.remove('added');
+      const state = chip.querySelector('.routing-rec-state');
+      if (state) state.textContent = '+';
+    }
+    if (wasRunning) updateSmartDash('connected');
+  }).finally(() => {
+    processRuleAddInFlight = false;
+  });
+}
+
 function initRoutingPresets() {
   const iranToggle = document.getElementById('toggle-preset-iran');
   const lanToggle = document.getElementById('toggle-preset-lan');
@@ -2744,26 +4029,124 @@ function initRoutingPresets() {
   
   if (iranToggle) iranToggle.addEventListener('change', () => {
     invoke('update_routing_preset', { preset: 'bypass_iran', enabled: iranToggle.checked })
-      .then(() => { if(window.restartConnectionIfActive) window.restartConnectionIfActive(); })
+      .then((reloaded) => { if(!reloaded && window.restartConnectionIfActive) window.restartConnectionIfActive(); })
       .catch(e => console.error(e));
   });
   if (lanToggle) lanToggle.addEventListener('change', () => {
     invoke('update_routing_preset', { preset: 'bypass_lan', enabled: lanToggle.checked })
-      .then(() => { if(window.restartConnectionIfActive) window.restartConnectionIfActive(); })
+      .then((reloaded) => { if(!reloaded && window.restartConnectionIfActive) window.restartConnectionIfActive(); })
       .catch(e => console.error(e));
   });
   if (adsToggle) adsToggle.addEventListener('change', () => {
     invoke('update_routing_preset', { preset: 'block_ads', enabled: adsToggle.checked })
-      .then(() => { if(window.restartConnectionIfActive) window.restartConnectionIfActive(); })
+      .then((reloaded) => { if(!reloaded && window.restartConnectionIfActive) window.restartConnectionIfActive(); })
       .catch(e => console.error(e));
   });
+  // The proxy-only control is the same small switch the TUN toggle is. A checkbox has already
+  // flipped `.checked` by the time `change` fires, so a handler that re-reads it and compares it
+  // against itself always bails out and the toggle silently does nothing -- the mode is never
+  // written and the restart never runs. The three toggles above send `.checked` straight to the
+  // invoke, so this one does too; a duplicate restart is already collapsed by the debounce in
+  // restartConnectionIfActive.
+  const proxyOnlyToggle = document.getElementById('toggle-preset-proxy-only');
+  if (proxyOnlyToggle) {
+    proxyOnlyToggle.addEventListener('change', async () => {
+      const enabled = proxyOnlyToggle.checked;
+      try {
+        await invoke('update_routing_preset', { preset: 'proxy_only_mode', enabled });
+        applyProxyOnlyMode(enabled);
+        // Proxy-only flips TUN default route AND changes which process rules
+        // matter, so the virtual adapter MUST fully restart.  Skip the 800 ms
+        // debounce that restartConnectionIfActive uses -- go straight to the
+        // reconnect so the user sees the switch happen immediately.
+        if (isRunning && connectedServerLink) {
+          const link = connectedServerLink;
+          connectedServerLink = null;
+          isRunning = false;
+          isConnecting = false;
+          refreshProcessRuleWarning();
+          await connectToLink(link, true);
+        }
+      } catch (e) {
+        console.error('Failed to toggle proxy-only mode:', e);
+        proxyOnlyToggle.checked = !enabled;
+      }
+    });
+  }
 
   // Load initial preset states
   invoke('get_routing_settings').then(data => {
     if (iranToggle) iranToggle.checked = !!data.bypass_iran;
     if (lanToggle) lanToggle.checked = !!data.bypass_lan;
     if (adsToggle) adsToggle.checked = !!data.block_ads;
+    if (proxyOnlyToggle) {
+      proxyOnlyToggle.checked = !!data.proxy_only_mode;
+      applyProxyOnlyMode(!!data.proxy_only_mode);
+    }
   }).catch(e => console.error('Failed to load routing presets:', e));
+}
+
+// Selecting a rule action goes through the dropdown markup, so setting it from code has
+// to rebuild that same markup rather than just writing the hidden input.
+function setRuleActionDropdown(value) {
+  const actionSelect = document.getElementById('select-rule-action');
+  const opt = document.querySelector('#action-dropdown .custom-dropdown-option[data-value="' + value + '"]');
+  if (!actionSelect || !opt) return;
+  const selected = document.getElementById('action-dropdown-selected');
+  if (selected) selected.innerHTML = '<span class="dropdown-value">' + opt.innerHTML + '</span>';
+  document.querySelectorAll('#action-dropdown .custom-dropdown-option').forEach(o => o.classList.toggle('active', o === opt));
+  actionSelect.value = value;
+}
+
+// Proxy-only mode inverts the default route; it does not rewrite the rules. Both lists
+// stay populated in the DOM either way -- the tabs only pick which is on screen, and the
+// one whose default is not in force is dimmed, including its tab button -- so a user can
+// fill the proxy list in before turning it on and never loses the bypass list by
+// switching. Nothing here touches the connection; the caller restarts it if a restart is
+// warranted.
+function applyProxyOnlyMode(on) {
+  const hint = document.getElementById('proxy-only-hint');
+  if (hint) hint.classList.toggle('visible', on);
+
+  const bypassSection = document.getElementById('routing-section-bypass');
+  const proxySection = document.getElementById('routing-section-proxy');
+  if (bypassSection) bypassSection.classList.toggle('mode-inactive', on);
+  if (proxySection) proxySection.classList.toggle('mode-inactive', !on);
+
+  // The Applications halves sit in the same panes and follow the same rule: a bypass app
+  // rule emits "direct", which is already the default while Proxy-Only is on, so leaving
+  // them at full opacity would imply they still have an effect.
+  const bypassApps = document.getElementById('routing-sub-bypass-apps');
+  const proxyApps = document.getElementById('routing-sub-proxy-apps');
+  if (bypassApps) bypassApps.classList.toggle('mode-inactive', on);
+  if (proxyApps) proxyApps.classList.toggle('mode-inactive', !on);
+
+  // The dim alone does not say where to put the app, so the half that is out of force
+  // explains itself. `hidden` keeps the note off the page in the mode where this list is the
+  // one doing the work; the text itself follows the language pass like every other label.
+  const bypassNote = document.getElementById('bypass-apps-mode-note');
+  const proxyNote = document.getElementById('proxy-apps-mode-note');
+  if (bypassNote) bypassNote.hidden = !on;
+  if (proxyNote) proxyNote.hidden = on;
+
+  // The lists now live on separate tabs, so the dim has to reach the tab bar too --
+  // otherwise the mode is invisible until you open the other list.
+  const bypassTab = document.querySelector('.routing-tab-btn[data-rtab="bypass"]');
+  const proxyTab = document.querySelector('.routing-tab-btn[data-rtab="proxy"]');
+  if (bypassTab) bypassTab.classList.toggle('mode-inactive', on);
+  if (proxyTab) proxyTab.classList.toggle('mode-inactive', !on);
+
+  // The pills are keyed so a language change re-renders them without our help.
+  setPill(document.getElementById('bypass-mode-pill'), !on);
+  setPill(document.getElementById('proxy-mode-pill'), on);
+}
+
+function setPill(pill, active) {
+  if (!pill) return;
+  const key = active ? 'routing.proxy_only.active' : 'routing.proxy_only.inactive';
+  pill.classList.toggle('inactive', !active);
+  pill.setAttribute('data-i18n', key);
+  pill.textContent = t(key);
 }
 
 // ===== Settings Toggle Listeners =====
@@ -2791,6 +4174,17 @@ function initSettingsListeners() {
   const remoteDns = document.getElementById('input-remote-dns');
   const localDns = document.getElementById('input-local-dns');
   const coreSelect = document.getElementById('select-core');
+
+  // Light theme. The whole palette is one html[data-theme] attribute -- the stylesheet
+  // carries the inverted values -- so applying it is an attribute set, not a class swap.
+  const lightThemeToggle = document.getElementById('toggle-light-theme');
+  if (lightThemeToggle) {
+    lightThemeToggle.addEventListener('change', (e) => {
+      applyTheme(e.target.checked ? 'light' : 'dark');
+      invoke('set_theme', { theme: e.target.checked ? 'light' : 'dark' })
+        .catch((err) => console.error('Failed to save theme:', err));
+    });
+  }
   
   if (autoStart) autoStart.addEventListener('change', () => {
     invoke('set_auto_start', { enabled: autoStart.checked }).catch(e => console.error(e));
@@ -2832,9 +4226,10 @@ function initSettingsListeners() {
       opt.addEventListener('click', (e) => {
         e.stopPropagation();
         const val = opt.getAttribute('data-value');
-        
-        // Update UI
-        coreDropdownSelected.textContent = opt.textContent.trim();
+
+        // Copy the markup, not just text -- the option carries its own data-i18n hook,
+        // so the selected label keeps translating after a language switch.
+        coreDropdownSelected.innerHTML = opt.innerHTML;
         coreDropdownOptions.forEach(o => o.classList.remove('active'));
         opt.classList.add('active');
         
@@ -2880,19 +4275,75 @@ function initSettingsListeners() {
   // Fallback native listener just in case
   if (coreSelect) coreSelect.addEventListener('change', updateCoreSettings);
 
+  // Language dropdown
+  const langDropdown = document.getElementById('language-dropdown');
+  const langDropdownSelected = document.getElementById('language-dropdown-selected');
+  const langSelect = document.getElementById('select-language');
+
+  if (langDropdown && langDropdownSelected && langSelect) {
+    langDropdownSelected.addEventListener('click', (e) => {
+      e.stopPropagation();
+      langDropdown.classList.toggle('open');
+    });
+
+    document.addEventListener('click', () => {
+      langDropdown.classList.remove('open');
+    });
+
+    langDropdown.querySelectorAll('.custom-dropdown-option').forEach(opt => {
+      opt.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        const val = opt.getAttribute('data-value');
+
+        langDropdownSelected.textContent = opt.textContent.trim();
+        langDropdown.querySelectorAll('.custom-dropdown-option').forEach(o => o.classList.remove('active'));
+        opt.classList.add('active');
+
+        langSelect.value = val;
+        langDropdown.classList.remove('open');
+
+        await changeLanguage(val);
+      });
+    });
+  }
+
   let restartDebounceTimer = null;
+  let restartAttempts = 0;
+
+  // Changing a routing preset rewrites the core config, which only takes effect on
+  // the next connect. The restart has to survive a connect that is already in
+  // flight: connectToLink refuses to run two at once, so handing the request to it
+  // while one is running got the request dropped on the floor -- the first connect
+  // would then abort against the state this function had already cleared and leave
+  // the app stuck on "Connecting".
   async function restartConnectionIfActive() {
     if (restartDebounceTimer) clearTimeout(restartDebounceTimer);
-    restartDebounceTimer = setTimeout(async () => {
-        if (isRunning && connectedServerLink) {
-          console.log('Routing/Core settings changed. Reconnecting automatically...');
-          const link = connectedServerLink;
-          connectedServerLink = null; // Clean state for a fresh connectToLink
-          isRunning = false;
-          isConnecting = false;
-          await connectToLink(link, true);
-        }
-    }, 800);
+    restartAttempts = 0;
+    restartDebounceTimer = setTimeout(restartConnectionNow, 800);
+  }
+
+  async function restartConnectionNow() {
+    if (!isRunning || !connectedServerLink) return;
+
+    const link = connectedServerLink;
+    if (isConnectToLinkActive) {
+      // A connect is still settling. Loop back around instead of giving up: a
+      // dropped restart is exactly what strands the connection mid-switch.
+      if (restartAttempts++ >= 10) {
+        restartAttempts = 0;
+        return;
+      }
+      restartDebounceTimer = setTimeout(restartConnectionNow, 400);
+      return;
+    }
+    restartAttempts = 0;
+
+    console.log('Routing/Core settings changed. Reconnecting automatically...');
+    connectedServerLink = null; // Clean state for a fresh connectToLink
+    isRunning = false;
+    isConnecting = false;
+    refreshProcessRuleWarning();
+    await connectToLink(link, true);
   }
 
   // Export for global access by inline onclicks
@@ -2911,23 +4362,23 @@ function initSettingsListeners() {
   });
     if (livePing) livePing.addEventListener('change', () => {
     invoke('set_live_ping_enabled', { enabled: livePing.checked }).catch(e => console.error(e));
-    const wrapper = document.querySelector('.micro-wrapper');
-    if (wrapper) {
-      if (livePing.checked) {
-        wrapper.classList.remove('ping-off');
-      } else {
-        wrapper.classList.add('ping-off');
-      }
-    }
+    applyLivePingToggle();
   });
-  // Duplicate listeners removed â€” updateCoreSettings already handles these via lines 1716/1721
+  // Duplicate listeners removed — updateCoreSettings already handles these via lines 1716/1721
   if (remoteDns) remoteDns.addEventListener('change', () => {
     const local = localDns ? localDns.value : 'local';
-    invoke('update_dns_settings', { remote: remoteDns.value, local: local }).catch(e => console.error(e));
+    // Resolvers are baked into the config at build time, so a change made while connected
+    // silently kept using the old one. Every other control in this tab restarts the
+    // connection for exactly this reason; these two were the only ones that did not.
+    invoke('update_dns_settings', { remote: remoteDns.value, local: local })
+      .then((reloaded) => { if(!reloaded && restartConnectionIfActive) restartConnectionIfActive(); })
+      .catch(e => console.error(e));
   });
   if (localDns) localDns.addEventListener('change', () => {
-    const remote = remoteDns ? remoteDns.value : 'https://1.1.1.1/dns-query';
-    invoke('update_dns_settings', { remote: remote, local: localDns.value }).catch(e => console.error(e));
+    const remote = remoteDns ? remoteDns.value : 'https://8.8.8.8/dns-query';
+    invoke('update_dns_settings', { remote: remote, local: localDns.value })
+      .then((reloaded) => { if(!reloaded && restartConnectionIfActive) restartConnectionIfActive(); })
+      .catch(e => console.error(e));
   });
 }
 
@@ -2943,14 +4394,7 @@ async function loadSettingsValues() {
     setChecked('toggle-auto-update-subs', settings.auto_update_subs);
     setChecked('toggle-auto-reconnect', settings.auto_reconnect);
         setChecked('toggle-live-ping', settings.live_ping_enabled);
-    const wrapper = document.querySelector('.micro-wrapper');
-    if (wrapper) {
-      if (settings.live_ping_enabled) {
-        wrapper.classList.remove('ping-off');
-      } else {
-        wrapper.classList.add('ping-off');
-      }
-    }
+    applyLivePingToggle();
     
     // Disable start minimized if auto start is off
     const minItem = document.getElementById('toggle-start-minimized');
@@ -2976,7 +4420,9 @@ async function loadSettingsValues() {
         options.forEach(opt => {
           if (opt.getAttribute('data-value') === coreEl.value) {
             opt.classList.add('active');
-            if (coreDropdownSelected) coreDropdownSelected.textContent = opt.textContent.trim();
+            // Copy the markup, not the text -- the option's data-i18n hook has to ride
+            // along or the label stops translating after this load.
+            if (coreDropdownSelected) coreDropdownSelected.innerHTML = opt.innerHTML;
           } else {
             opt.classList.remove('active');
           }
@@ -2987,6 +4433,18 @@ async function loadSettingsValues() {
       if (fragEl) fragEl.checked = !!coreSettings.tls_fragment;
       const strictEl = document.getElementById('toggle-strict-route');
       if (strictEl) strictEl.checked = !!coreSettings.strict_route;
+    }
+  } catch (_) {}
+
+  // Otherwise the inputs keep showing the hardcoded HTML default and silently
+  // disagree with the resolver the core is actually using.
+  try {
+    const dns = await invoke('get_dns_settings');
+    if (dns) {
+      const rd = document.getElementById('input-remote-dns');
+      if (rd) rd.value = dns.remote_dns || '';
+      const ld = document.getElementById('input-local-dns');
+      if (ld) ld.value = dns.local_dns || '';
     }
   } catch (_) {}
 }
@@ -3138,13 +4596,13 @@ function openEditServerModal(groupKey, link) {
     
     const parsed = parseVpnLink(link);
     if (!parsed) {
-      alert('This link format cannot be edited right now. It might be malformed or an unsupported protocol.');
+      alert(t('dialog.edit_link_unsupported'));
       return;
     }
     currentEditServerParsed = parsed;
     
     if (!document.getElementById('edit-server-modal')) {
-      alert('HTML Modal Missing! Please run npm run tauri dev again.');
+      alert(t('dialog.dev_modal_missing'));
       return;
     }
     
@@ -3157,7 +4615,7 @@ function openEditServerModal(groupKey, link) {
     
     document.getElementById('edit-server-modal').style.display = 'flex';
   } catch (e) {
-    alert('Crash: ' + e.message + '\n' + e.stack);
+    alert(t('dialog.crash', null, {msg: e.message, stack: e.stack}));
   }
 }
 
@@ -3207,11 +4665,11 @@ async function saveServerEdits() {
        selectedServerLink = newLink;
     }
     
-    log('Server updated successfully.');
+    log(t('log.server_updated'));
     closeEditServerModal();
     await refreshServerList(); // Refresh UI
   } catch (e) {
-    log('Failed to edit server: ' + e);
+    log(t('log.edit_server_failed', null, {err: e}));
   }
 }
 
@@ -3232,7 +4690,7 @@ function openEditSubModal(groupKey, groupData) {
   const countEl = document.getElementById('edit-sub-server-count');
   if (countEl) {
     const c = (groupData.servers ? groupData.servers.length : groupData.servers_count) || 0;
-    countEl.textContent = `${c} Servers`;
+    countEl.textContent = t('common.servers_n', null, { count: c, n: c });
   }
 
   const autoToggle = document.getElementById('edit-sub-auto-update');
@@ -3272,6 +4730,9 @@ function openEditSubModal(groupKey, groupData) {
     if (!stats) return;
     const totalEl = document.getElementById('edit-sub-total-used');
     if (totalEl) totalEl.textContent = formatBytes(stats.total_used || 0);
+
+    const uploadEl = document.getElementById('edit-sub-total-upload');
+    if (uploadEl) uploadEl.textContent = formatBytes(stats.total_upload || 0);
 
     const pingEl = document.getElementById('edit-sub-avg-ping');
     if (pingEl) {
@@ -3323,7 +4784,7 @@ async function saveSubscriptionEdits() {
     await refreshServerList();
     await refreshSubscriptions();
   } catch (e) {
-    log('Failed to save subscription: ' + e);
+    log(t('log.save_sub_failed', null, {err: e}));
   }
 }
 
@@ -3331,37 +4792,39 @@ async function saveSubscriptionEdits() {
 async function refreshStatsData() {
   if (!currentStatsKey) return;
   try {
-    let aggregatedStats = { total_used: 0, daily_usage: {}, ping_history: [] };
-    
+    let aggregatedStats = { total_used: 0, total_upload: 0, daily_usage: {}, ping_history: [] };
+
     if (currentStatsIsGroup) {
       const labelEl = document.querySelector('#stats-total-used').previousElementSibling;
-      if (labelEl) labelEl.textContent = 'Total used in this client';
-      
+      if (labelEl) labelEl.textContent = t('stats.total_in_client');
+
       const groupStats = await invoke('get_item_stats', { isGroup: true, key: currentStatsKey });
-      const hasNativeGroupStats = groupStats && (groupStats.total_used > 0 || Object.keys(groupStats.daily_usage || {}).length > 0);
-      
+      const hasNativeGroupStats = groupStats && (groupStats.total_used > 0 || groupStats.total_upload > 0 || Object.keys(groupStats.daily_usage || {}).length > 0);
+
       if (hasNativeGroupStats) {
         aggregatedStats.total_used = groupStats.total_used || 0;
+        aggregatedStats.total_upload = groupStats.total_upload || 0;
         aggregatedStats.daily_usage = groupStats.daily_usage || {};
       }
-      
+
       if (currentStatsGroupData && currentStatsGroupData.servers) {
         let allPings = [];
-        
+
         // Fetch stats concurrently to avoid blocking the UI thread for 100+ servers
         const statPromises = currentStatsGroupData.servers.map(server => {
           const lUrl = typeof server === 'string' ? server : server.link || server.url;
           return invoke('get_item_stats', { isGroup: false, key: lUrl }).catch(() => null);
         });
         const statResults = await Promise.all(statPromises);
-        
+
         for (const s of statResults) {
           if (s) {
             if (s.ping_history) allPings.push(...s.ping_history);
-            
+
             // Only aggregate traffic if we don't have native group stats (legacy fallback)
             if (!hasNativeGroupStats) {
               aggregatedStats.total_used += (s.total_used || 0);
+              aggregatedStats.total_upload += (s.total_upload || 0);
               if (s.daily_usage) {
                 for (const [date, bytes] of Object.entries(s.daily_usage)) {
                   aggregatedStats.daily_usage[date] = (aggregatedStats.daily_usage[date] || 0) + bytes;
@@ -3374,23 +4837,26 @@ async function refreshStatsData() {
       }
     } else {
       const labelEl = document.querySelector('#stats-total-used').previousElementSibling;
-      if (labelEl) labelEl.textContent = 'Total Used';
-      
+      if (labelEl) labelEl.textContent = t('stats.total_used');
+
       const stats = await invoke('get_item_stats', { isGroup: false, key: currentStatsKey });
       if (stats) aggregatedStats = stats;
     }
 
     // Check if never connected (all stats empty)
-    const hasData = (aggregatedStats.total_used && aggregatedStats.total_used > 0) || 
+    const hasData = (aggregatedStats.total_used && aggregatedStats.total_used > 0) ||
+                    (aggregatedStats.total_upload && aggregatedStats.total_upload > 0) ||
                     (aggregatedStats.daily_usage && Object.keys(aggregatedStats.daily_usage).length > 0) ||
                     (aggregatedStats.ping_history && aggregatedStats.ping_history.length > 0);
-    
+
     if (!hasData) {
-      document.getElementById('stats-total-used').textContent = 'Waiting for connection';
+      document.getElementById('stats-total-used').textContent = t('stats.waiting_connection');
+      document.getElementById('stats-total-upload').textContent = t('stats.waiting_connection');
       document.getElementById('stats-avg-ping').textContent = '- ms';
     } else {
       // Update total used
       document.getElementById('stats-total-used').textContent = formatBytes(aggregatedStats.total_used || 0);
+      document.getElementById('stats-total-upload').textContent = formatBytes(aggregatedStats.total_upload || 0);
       
       // Update average ping
       const pings = aggregatedStats.ping_history || [];
@@ -3413,6 +4879,18 @@ function renderDailyUsageGraph(canvas, dailyUsage) {
   if (!canvas) return;
   const ctx = canvas.getContext('2d');
   if (!ctx) return;
+
+  // Canvas painting cannot see CSS variables, so the theme's overlay and text tokens are
+  // resolved here. Without this the gridlines and axis labels are drawn white on white in
+  // the light theme and disappear along with them.
+  const cssVar = (name, fallback) => {
+    const v = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+    return v || fallback;
+  };
+  const grid = cssVar('--ov-006', 'rgba(255,255,255,0.06)');
+  const axis = cssVar('--text-faint', '#888888');
+  const dotFill = cssVar('--solid-inv', '#ffffff');
+  const lineColor = 'rgba(74, 222, 128, 1)';
   
   let dates = Object.keys(dailyUsage || {}).sort();
   
@@ -3441,17 +4919,17 @@ function renderDailyUsageGraph(canvas, dailyUsage) {
   ctx.clearRect(0, 0, w, h);
   
   if (dates.length === 0) {
-    ctx.strokeStyle = 'rgba(255, 255, 255, 0.05)';
+    ctx.strokeStyle = grid;
     ctx.beginPath();
     ctx.moveTo(30, h - 25);
     ctx.lineTo(w - 30, h - 25);
     ctx.stroke();
 
-    ctx.fillStyle = 'rgba(255, 255, 255, 0.4)';
+    ctx.fillStyle = axis;
     ctx.font = '12px Inter, sans-serif';
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
-    ctx.fillText('No traffic data recorded yet', w / 2, h / 2);
+    ctx.fillText(t('stats.no_traffic_data'), w / 2, h / 2);
     return;
   }
   
@@ -3467,8 +4945,8 @@ function renderDailyUsageGraph(canvas, dailyUsage) {
   const graphH = Math.max(10, h - padBottom - padTop);
   
   // Draw grid & Y-axis labels
-  ctx.strokeStyle = 'rgba(255, 255, 255, 0.05)';
-  ctx.fillStyle = '#888';
+  ctx.strokeStyle = grid;
+  ctx.fillStyle = axis;
   ctx.font = '10px Inter, sans-serif';
   ctx.textAlign = 'right';
   ctx.textBaseline = 'middle';
@@ -3517,33 +4995,33 @@ function renderDailyUsageGraph(canvas, dailyUsage) {
     for (const p of points) {
       ctx.lineTo(p.x, p.y);
     }
-    ctx.strokeStyle = 'rgba(74, 222, 128, 1)';
+    ctx.strokeStyle = lineColor;
     ctx.lineWidth = 2;
     ctx.stroke();
     
     // Draw points and X-axis labels
     ctx.textAlign = 'center';
     ctx.textBaseline = 'top';
-    ctx.fillStyle = '#888';
-    
+    ctx.fillStyle = axis;
+
     points.forEach((p, i) => {
       // Dot
       ctx.beginPath();
       ctx.arc(p.x, p.y, 3, 0, 2 * Math.PI);
-      ctx.fillStyle = '#fff';
+      ctx.fillStyle = dotFill;
       ctx.fill();
       ctx.lineWidth = 1.5;
-      ctx.strokeStyle = 'rgba(74, 222, 128, 1)';
+      ctx.strokeStyle = lineColor;
       ctx.stroke();
-      
+
       // Label
       const [yr, mo, dy] = dates[i].split('-').map(Number);
       const dateObj = new Date(yr, mo - 1, dy);
       const label = dateObj.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
-      
+
       // Only draw label if there's space (avoid crowding)
       if (stepX > 40 || i % Math.ceil(40 / stepX) === 0 || i === points.length - 1) {
-        ctx.fillStyle = '#888';
+        ctx.fillStyle = axis;
         ctx.fillText(label, p.x, padTop + graphH + 8);
       }
     });
@@ -3554,55 +5032,204 @@ function drawStatsGraph(dailyUsage, pingHistory) {
   renderDailyUsageGraph(document.getElementById('stats-canvas'), dailyUsage);
 }
 
+// The backend reports an empty string when every enabled .exe rule will be honoured, or a
+// stable code when one cannot be. The code indexes the strings in i18n-strings.js, so the
+// copy stays translated and the backend never holds prose.
+const PROCESS_RULE_REASONS = { link_forces_xray: 'routing.apps.rule_inert_xhttp' };
+
+function refreshProcessRuleWarning() {
+  const els = ['bypass-apps-rule-warning', 'proxy-apps-rule-warning']
+    .map(id => document.getElementById(id))
+    .filter(Boolean);
+  const hide = () => els.forEach(el => {
+    el.hidden = true;
+    el.textContent = '';
+    el.removeAttribute('data-i18n');
+  });
+  hide();
+  // Nothing is connected, so no config is generated and no rule is being dropped.
+  // This is the module-scoped binding, not a window property: app.js loads as a classic
+  // script, so a top-level `let` is a global lexical binding and `window.connectedServerLink`
+  // is permanently undefined -- which silently held this warning closed forever.
+  if (!connectedServerLink) return;
+  const link = connectedServerLink;
+  invoke('process_rule_status', { link, tunMode: !!(tunToggle && tunToggle.checked) })
+    .then(code => {
+      const key = PROCESS_RULE_REASONS[code];
+      if (!key) return;
+      els.forEach(el => {
+        // Carrying data-i18n lets the language pass re-translate this without our help,
+        // the same way the mode pills do.
+        el.setAttribute('data-i18n', key);
+        el.textContent = t(key);
+        el.hidden = false;
+      });
+    })
+    .catch(e => console.error('process_rule_status failed:', e));
+}
+
 // ===== Routing Rules Display =====
 async function refreshRoutingRules() {
   try {
     const result = await invoke('get_routing_rules');
     const rules = result.rules || result || [];
-    const listEl = document.getElementById('routing-rules-list');
-    if (!listEl) return;
-    listEl.innerHTML = '';
-    
-    if (Array.isArray(rules)) {
-      rules.forEach(rule => {
-        const item = document.createElement('div');
-        item.className = 'routing-rule-item';
-        const isBypass = rule.action === 'bypass';
-        const iconSvg = isBypass
-          ? '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 14 20 9 15 4"></polyline><path d="M4 20v-7a4 4 0 0 1 4-4h12"></path></svg>'
-          : '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><line x1="4.93" y1="4.93" x2="19.07" y2="19.07"></line></svg>';
-        const actionLabel = isBypass ? 'Bypass' : 'Block';
-        const isEnabled = rule.enabled !== false; // Default to true if missing
-        const patternStyle = isEnabled ? '' : 'opacity: 0.4; text-decoration: line-through;';
-        
-        item.innerHTML = `
-          <div style="display: flex; align-items: center; gap: 8px; flex: 1; overflow: hidden;">
-            <span class="routing-rule-pattern" style="${patternStyle}">${rule.pattern}</span>
-            <span class="routing-rule-action ${rule.action}" style="${!isEnabled ? 'opacity: 0.4;' : ''}">${iconSvg} ${actionLabel}</span>
-          </div>
-          <div style="display: flex; align-items: center; gap: 8px; flex-shrink: 0;">
-            <label class="toggle-switch" style="transform: scale(0.65); margin: 0;" title="Enable/Disable Rule">
-              <input type="checkbox" onchange="handleToggleRoutingRule('${rule.id}', this.checked)" ${isEnabled ? 'checked' : ''}>
-              <span class="toggle-slider"></span>
-            </label>
-            <button class="routing-rule-delete" onclick="handleDeleteRoutingRule('${rule.id}')" title="Delete Rule">
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
-            </button>
-          </div>
-        `;
-        listEl.appendChild(item);
-      });
+
+    const BYPASS_ICON = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 14 20 9 15 4"></polyline><path d="M4 20v-7a4 4 0 0 1 4-4h12"></path></svg>';
+    const PROXY_ICON = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><line x1="2" y1="12" x2="22" y2="12"></line><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"></path></svg>';
+    const BLOCK_ICON = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><line x1="4.93" y1="4.93" x2="19.07" y2="19.07"></line></svg>';
+    // Actions the backend understands. An unknown value is shown as-is rather than
+    // collapsed to Bypass, so a future action never silently changes meaning.
+    const KNOWN_ACTIONS = {
+      bypass: { icon: BYPASS_ICON, label: t('routing.action.bypass') },
+      proxy: { icon: PROXY_ICON, label: t('routing.action.proxy') },
+      block: { icon: BLOCK_ICON, label: t('routing.action.block') },
+    };
+
+    // The list is split by action into the two sections the UI shows, so the mode
+    // toggle and the rules a user sees always agree. Process rules go to the
+    // Applications half of the same pane; they are a different engine concept and get
+    // their own rendering with an icon and a file name instead of a bare pattern.
+    const byAction = (action) => (Array.isArray(rules) ? rules : []).filter(r => r.action === action);
+    const isProcess = (r) => (r.kind || 'domain') === 'process';
+    const byKind = (action, kind) => byAction(action).filter(r => kind === 'process' ? isProcess(r) : !isProcess(r));
+
+    renderRulesInto(byKind('bypass', 'domain'), 'bypass-rules-list', KNOWN_ACTIONS, 'bypass');
+    renderRulesInto(byKind('proxy', 'domain'), 'proxy-rules-list', KNOWN_ACTIONS, 'proxy');
+    renderRulesInto(byKind('block', 'domain'), 'block-rules-list', KNOWN_ACTIONS, 'block');
+    renderProcessRulesInto(byKind('bypass', 'process'), 'bypass-apps-list', 'bypass');
+    renderProcessRulesInto(byKind('proxy', 'process'), 'proxy-apps-list', 'proxy');
+
+    // The recommended chips mark the ones already in the list, so publish the current set
+    // before they re-render. Repainting is safe now -- a scan still in flight keeps its
+    // placeholder instead of being wiped to empty.
+    window.__vxrayProcessRules = {
+      bypass: byKind('bypass', 'process').map(r => r.pattern),
+      proxy: byKind('proxy', 'process').map(r => r.pattern),
+    };
+    repaintRecommended();
+
+    const count = (action, kind) => byKind(action, kind).length;
+    for (const [action, id] of [['bypass','bypass-count'], ['proxy','proxy-count'], ['block','block-count']]) {
+      const el = document.getElementById(id);
+      if (el) el.textContent = count(action, 'domain');
     }
+    for (const [action, id] of [['bypass','bypass-apps-count'], ['proxy','proxy-apps-count']]) {
+      const el = document.getElementById(id);
+      if (el) el.textContent = count(action, 'process');
+    }
+    // Legacy block rules have no add-control anymore, so the section only shows up
+    // if some are actually stored.
+    const blockSection = document.getElementById('routing-section-block');
+    if (blockSection) blockSection.style.display = count('block', 'domain') ? '' : 'none';
+
+    // An .exe rule the connected server cannot carry is still listed and still enabled, so it
+    // has to be flagged where it sits -- otherwise it reads as a toggle that does nothing.
+    refreshProcessRuleWarning();
   } catch (e) {
     console.error('Failed to load routing rules:', e);
   }
 }
 
+function renderRulesInto(rules, listId, KNOWN_ACTIONS, action) {
+  const listEl = document.getElementById(listId);
+  if (!listEl) return;
+  listEl.innerHTML = '';
+
+  if (!rules.length) {
+    const empty = document.createElement('div');
+    empty.className = 'routing-empty-hint';
+    empty.dataset.i18n = 'routing.empty.' + action;
+    empty.textContent = t('routing.empty.' + action);
+    empty.dir = 'auto';
+    listEl.appendChild(empty);
+    return;
+  }
+
+  rules.forEach(rule => {
+    const item = document.createElement('div');
+    item.className = 'routing-rule-item';
+    const meta = KNOWN_ACTIONS[rule.action] || null;
+    const actionHtml = meta
+      ? `${meta.icon} ${meta.label}`
+      : `${KNOWN_ACTIONS.block.icon} ${rule.action}`;
+    const isEnabled = rule.enabled !== false; // Default to true if missing
+    const patternStyle = isEnabled ? '' : 'opacity: 0.4; text-decoration: line-through;';
+
+    item.innerHTML = `
+      <div style="display: flex; align-items: center; gap: 8px; flex: 1; overflow: hidden;">
+        <span class="routing-rule-pattern" style="${patternStyle}">${escapeHtml(rule.pattern)}</span>
+        <span class="routing-rule-action ${rule.action}" style="${!isEnabled ? 'opacity: 0.4;' : ''}">${actionHtml}</span>
+      </div>
+      <div style="display: flex; align-items: center; gap: 8px; flex-shrink: 0;">
+        <label class="toggle-switch" style="transform: scale(0.65); margin: 0;" title="${t('routing.rule.toggle')}">
+          <input type="checkbox" onchange="handleToggleRoutingRule('${rule.id}', this.checked)" ${isEnabled ? 'checked' : ''}>
+          <span class="toggle-slider"></span>
+        </label>
+        <button class="routing-rule-delete" onclick="handleDeleteRoutingRule('${rule.id}')" title="${t('routing.rule.delete')}">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+        </button>
+      </div>
+    `;
+    listEl.appendChild(item);
+  });
+}
+
+function renderProcessRulesInto(rules, listId, mode) {
+  const listEl = document.getElementById(listId);
+  if (!listEl) return;
+  listEl.innerHTML = '';
+
+  if (!rules.length) {
+    const empty = document.createElement('div');
+    empty.className = 'routing-empty-hint';
+    empty.dataset.i18n = 'routing.apps.empty_' + mode;
+    empty.textContent = t('routing.apps.empty_' + mode);
+    empty.dir = 'auto';
+    listEl.appendChild(empty);
+    return;
+  }
+
+  rules.forEach(rule => {
+    const item = document.createElement('div');
+    item.className = 'routing-rule-item routing-app-item';
+    const isEnabled = rule.enabled !== false;
+    const patternStyle = isEnabled ? '' : 'opacity: 0.4; text-decoration: line-through;';
+
+    // A full path is too long for the row, so show the file name and keep the path in
+    // the title for anyone who needs to see where it came from.
+    const fileName = rule.pattern.split('\\').pop().split('/').pop() || rule.pattern;
+    const initial = (fileName.trim()[0] || '?').toUpperCase();
+
+    item.innerHTML = `
+      <div style="display: flex; align-items: center; gap: 10px; flex: 1; overflow: hidden;">
+        <span class="routing-app-icon" style="${!isEnabled ? 'opacity: 0.4;' : ''}" aria-hidden="true">${escapeHtml(initial)}</span>
+        <span style="display: flex; flex-direction: column; min-width: 0; flex: 1;">
+          <span class="routing-rule-pattern routing-app-name" style="${patternStyle}" title="${escapeHtml(rule.pattern)}">${escapeHtml(fileName)}</span>
+          <span class="routing-app-path">${escapeHtml(rule.pattern)}</span>
+        </span>
+      </div>
+      <div style="display: flex; align-items: center; gap: 8px; flex-shrink: 0;">
+        <label class="toggle-switch" style="transform: scale(0.65); margin: 0;" title="${t('routing.rule.toggle')}">
+          <input type="checkbox" onchange="handleToggleRoutingRule('${rule.id}', this.checked)" ${isEnabled ? 'checked' : ''}>
+          <span class="toggle-slider"></span>
+        </label>
+        <button class="routing-rule-delete" onclick="handleDeleteRoutingRule('${rule.id}')" title="${t('routing.rule.delete')}">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+        </button>
+      </div>
+    `;
+    listEl.appendChild(item);
+  });
+}
+
+// A process rule toggle and a process rule delete restart the adapter through the same path
+// adding one does, so they owe the user the same signal. Without it the switch looks dead for
+// the second or two the reload takes, which reads as "the toggle does nothing".
 async function handleToggleRoutingRule(id, enabled) {
   try {
-    await invoke('toggle_routing_rule', { id: id, enabled: enabled });
+    const reloaded = await invoke('toggle_routing_rule', { id: id, enabled: enabled });
     refreshRoutingRules();
-    if(window.restartConnectionIfActive) await window.restartConnectionIfActive();
+    if (!reloaded && window.restartConnectionIfActive) await window.restartConnectionIfActive();
   } catch (e) {
     console.error('Failed to toggle routing rule:', e);
   }
@@ -3610,13 +5237,14 @@ async function handleToggleRoutingRule(id, enabled) {
 
 async function handleDeleteRoutingRule(id) {
   try {
-    await invoke('delete_routing_rule', { id: id });
+    const reloaded = await invoke('delete_routing_rule', { id: id });
     refreshRoutingRules();
-    if(window.restartConnectionIfActive) await window.restartConnectionIfActive();
+    if (!reloaded && window.restartConnectionIfActive) await window.restartConnectionIfActive();
   } catch (e) {
     console.error(e);
   }
 }
+
 
 // ===== Subscription Collapse Memory =====
 async function saveCollapsedGroupsToSettings() {
@@ -3636,20 +5264,51 @@ function loadCollapsedGroupsFromSettings() {
 }
 
 // ===== Auto-Update Timer =====
-let autoUpdateInterval = null;
+// Per-group due times, so the interval each subscription card advertises is the interval that
+// actually refreshes it. A single hard-coded 4h tick used to service every group regardless of
+// the 1h/4h/12h/24h/48h value the modal saved, which made the control and its badge promise
+// behaviour the app never delivered.
+const subDueTimes = new Map();
+let autoUpdateTimer = null;
 
-function startAutoUpdateTimer() {
-  if (autoUpdateInterval) clearInterval(autoUpdateInterval);
-  // Update every 4 hours (4 * 60 * 60 * 1000 = 14400000)
-  autoUpdateInterval = setInterval(async () => {
-    try {
-      const settings = await invoke('get_startup_settings');
-      if (settings && settings.auto_update_subs) {
-        console.log('Auto-updating subscriptions (4h timer)...');
-        await updateAllSubscriptions();
+function scheduleNextSubscriptionSweep() {
+  if (autoUpdateTimer) clearInterval(autoUpdateTimer);
+  // A 10-minute sweep is the resolution floor: anything finer would hammer a provider for a
+  // 1h subscription that is already due, and the stored intervals are all an hour or more.
+  autoUpdateTimer = setInterval(refreshDueSubscriptions, 10 * 60 * 1000);
+  // The first check runs immediately rather than after the whole interval, so a launch that
+  // missed a scheduled refresh while closed does not wait an arbitrary extra 10 minutes.
+  refreshDueSubscriptions();
+}
+
+async function refreshDueSubscriptions() {
+  try {
+    const settings = await invoke('get_startup_settings');
+    if (!settings || !settings.auto_update_subs) return;
+
+    const subsRaw = await invoke('get_subscriptions');
+    const subs = typeof subsRaw === 'string' ? JSON.parse(subsRaw) : subsRaw;
+    if (!Array.isArray(subs)) return;
+
+    const now = Date.now();
+    for (const sub of subs) {
+      if (typeof sub === 'string') continue;
+      if (sub.auto_update === false || !sub.url || sub.url === 'manual') continue;
+
+      const hours = Number(sub.update_interval) > 0 ? Number(sub.update_interval) : 24;
+      const due = subDueTimes.get(sub.url);
+      if (due !== undefined && due > now) continue;
+
+      subDueTimes.set(sub.url, now + hours * 60 * 60 * 1000);
+      try {
+        await invoke('update_subscription', { url: sub.url });
+        await refreshServerList();
+        await refreshSubscriptions();
+      } catch (e) {
+        console.error('Failed to auto-update ' + sub.url + ': ' + e);
       }
-    } catch (e) { console.error(e); }
-  }, 14400000);
+    }
+  } catch (e) { console.error(e); }
 }
 
 // ===== Enhanced Init =====
@@ -3660,7 +5319,8 @@ document.addEventListener("DOMContentLoaded", () => {
   initSettingsListeners();
   loadSettingsValues();
   refreshRoutingRules();
-  startAutoUpdateTimer();
+  primeRecommendedApps();
+  scheduleNextSubscriptionSweep();
 });
 
 // ===== Batch Import & Modal Logic =====
@@ -3722,7 +5382,11 @@ async function pasteFromClipboard() {
   }
 }
 
-function parseImportContent(rawText) {
+// A JSON array of complete Xray configs is a valid subscription body but contains no
+// protocol:// token, so it would otherwise parse as zero servers. The conversion runs in Rust --
+// it is the same code path a fetched subscription takes, so a paste and a download of the same
+// content cannot diverge.
+async function parseImportContent(rawText) {
   if (!rawText) return { servers: [], subscriptions: [] };
   let text = rawText.trim();
 
@@ -3737,10 +5401,18 @@ function parseImportContent(rawText) {
     } catch (e) {}
   }
 
+  if (text.startsWith('[')) {
+    try {
+      const links = await invoke('xray_configs_to_links', { text });
+      if (links.length) {
+        return { servers: links, subscriptions: [] };
+      }
+    } catch (e) {}
+  }
+
   const lines = text.split(/[\r\n]+/);
   const serverSet = new Set();
   const subSet = new Set();
-  const proxyPrefixes = ['vless://', 'vmess://', 'ss://', 'trojan://', 'hy2://', 'hysteria2://', 'tuic://'];
 
   for (let line of lines) {
     const trimmedLine = line.trim();
@@ -3752,7 +5424,7 @@ function parseImportContent(rawText) {
       const t = token.trim();
       if (!t) continue;
 
-      const isProxy = proxyPrefixes.some(p => t.toLowerCase().startsWith(p));
+      const isProxy = PROXY_PREFIXES.some(p => t.toLowerCase().startsWith(p));
       if (isProxy) {
         serverSet.add(t);
       } else if (t.startsWith('http://') || t.startsWith('https://')) {
@@ -3767,28 +5439,28 @@ function parseImportContent(rawText) {
   };
 }
 
-function updateImportPreview() {
+async function updateImportPreview() {
   const textarea = document.getElementById('txt-import-content');
   const badge = document.getElementById('import-preview-badge');
   const btn = document.getElementById('btn-do-import');
   if (!textarea || !badge || !btn) return;
 
-  const { servers, subscriptions } = parseImportContent(textarea.value);
+  const { servers, subscriptions } = await parseImportContent(textarea.value);
   const total = servers.length + subscriptions.length;
 
   if (total === 0) {
     badge.className = 'import-preview-badge';
-    badge.innerHTML = '<span>Waiting for input...</span>';
+    badge.innerHTML = `<span>${t('import.waiting')}</span>`;
     btn.disabled = true;
-    btn.innerHTML = '<span>Import</span>';
+    btn.innerHTML = `<span>${t('import.import')}</span>`;
   } else {
     badge.className = 'import-preview-badge has-items';
     const parts = [];
-    if (servers.length > 0) parts.push(`${servers.length} server${servers.length > 1 ? 's' : ''}`);
-    if (subscriptions.length > 0) parts.push(`${subscriptions.length} subscription${subscriptions.length > 1 ? 's' : ''}`);
-    badge.innerHTML = `<span>âœ“ Recognized ${parts.join(', ')}</span>`;
+    if (servers.length > 0) parts.push(t('common.servers_n', null, {count: servers.length, n: servers.length}));
+    if (subscriptions.length > 0) parts.push(t('common.subscriptions_n', null, {count: subscriptions.length, n: subscriptions.length}));
+    badge.innerHTML = `<span>${t('import.recognized', null, {parts: parts.join(', ')})}</span>`;
     btn.disabled = false;
-    btn.innerHTML = `<span>Import ${total} Item${total > 1 ? 's' : ''}</span>`;
+    btn.innerHTML = `<span>${t('import.import_count', null, {count: total, n: total})}</span>`;
   }
 }
 
@@ -3798,19 +5470,19 @@ async function executeBatchImport() {
   const banner = document.getElementById('import-status-banner');
   if (!textarea || !btn) return;
 
-  const { servers, subscriptions } = parseImportContent(textarea.value);
+  const { servers, subscriptions } = await parseImportContent(textarea.value);
   const total = servers.length + subscriptions.length;
   if (total === 0) return;
 
   btn.disabled = true;
-  btn.innerHTML = `<span>Importing...</span>`;
+  btn.innerHTML = `<span>${t('import.importing')}</span>`;
 
   if (banner) {
     banner.style.display = 'flex';
-    banner.style.background = 'rgba(255, 255, 255, 0.08)';
-    banner.style.color = '#ffffff';
-    banner.style.border = '1px solid rgba(255, 255, 255, 0.15)';
-    banner.innerHTML = `<span>Processing ${total} items...</span>`;
+    banner.style.background = 'var(--ov-008)';
+    banner.style.color = 'var(--text-strong)';
+    banner.style.border = '1px solid var(--ov-015)';
+    banner.innerHTML = `<span>${t('import.processing', null, {n: total})}</span>`;
   }
 
   let importedServers = 0;
@@ -3858,9 +5530,9 @@ async function executeBatchImport() {
       banner.style.color = '#4ade80';
       banner.style.border = '1px solid rgba(74, 222, 128, 0.3)';
       const msgParts = [];
-      if (importedServers > 0) msgParts.push(`${importedServers} server(s)`);
-      if (importedSubs > 0) msgParts.push(`${importedSubs} subscription(s)`);
-      banner.innerHTML = `<span>âœ“ Successfully imported ${msgParts.join(' and ')}!</span>`;
+      if (importedServers > 0) msgParts.push(t('common.servers_n', null, {count: importedServers, n: importedServers}));
+      if (importedSubs > 0) msgParts.push(t('common.subscriptions_n', null, {count: importedSubs, n: importedSubs}));
+      banner.innerHTML = `<span>${t('import.success', null, {parts: msgParts.join(t('import.and'))})}</span>`;
     }
 
     // Auto-close after brief delay
@@ -3882,15 +5554,24 @@ async function executeBatchImport() {
       banner.style.background = 'rgba(248, 113, 113, 0.15)';
       banner.style.color = '#f87171';
       banner.style.border = '1px solid rgba(248, 113, 113, 0.3)';
-      banner.innerHTML = `<span>Import failed: ${err}</span>`;
+      banner.innerHTML = `<span>${t('import.failed', null, {err})}</span>`;
     }
     btn.disabled = false;
-    btn.innerHTML = `<span>Try Again</span>`;
+    btn.innerHTML = `<span>${t('import.try_again')}</span>`;
   }
 }
 
 // ===== Window Exposures =====
 window.switchSettingsTab = switchSettingsTab;
+window.switchRoutingTab = switchRoutingTab;
+window.switchRoutingSubTab = switchRoutingSubTab;
+window.browseExecutable = browseExecutable;
+window.handleAddProcessRule = handleAddProcessRule;
+window.checkForUpdates = checkForUpdates;
+window.startUpdateDownload = startUpdateDownload;
+window.installDownloadedUpdate = installDownloadedUpdate;
+window.copySystemInfo = copySystemInfo;
+window.openSupportUrl = openSupportUrl;
 window.closeStatsModal = closeStatsModal;
 window.closeEditSubModal = closeEditSubModal;
 window.saveSubscriptionEdits = saveSubscriptionEdits;
@@ -3917,171 +5598,39 @@ window.closeEditServerModal = closeEditServerModal;
 window.saveServerEdits = saveServerEdits;
 
 
+// Rebuild everything that renders its own text, so a language switch takes effect
+// immediately instead of waiting for the next data refresh.
+window.addEventListener('vxray-language-changed', () => {
+  updateSmartDash(_lastDashState, _lastDashPing);
+  updateConnectBtnText();
+  refreshServerList().catch(() => {});
+  refreshSubscriptions().catch(() => {});
+  refreshRoutingRules().catch(() => {});
+  // No data-i18n hooks here -- the labels are assigned imperatively, so they need the
+  // same re-render the other dynamic views already get.
+  refreshStatsData().catch(() => {});
+  // The version badge, the update card and the system row are all JS-rendered too.
+  renderSupportVersion();
+  renderUpdateCard();
+  if (systemInfoLoaded) renderSystemInfo();
+});
+
 // ===== Help System =====
 let _helpCurrentTopic = '';
 let _helpCurrentLang = 'en';
 
-const helpContent = {
-  "tls_fragment": {
-    "en": {
-      "title": "TLS Fragment",
-      "body": "<p>When enabled, the TLS ClientHello packets are fragmented into smaller pieces before reaching the firewall. This is highly effective at bypassing deep packet inspection (DPI) and SNI blocking.</p>"
-    },
-    "fa": {
-      "title": "قطعه‌قطعه کردن TLS (Fragment)",
-      "body": "<p>با فعال‌سازی این گزینه، بسته‌های اولیه اتصال (ClientHello) قبل از رسیدن به فایروال به قطعات کوچکتر تقسیم می‌شوند. این ویژگی برای دور زدن سیستم‌های فیلترینگ پیشرفته (DPI) و جلوگیری از مسدود شدن دامنه (SNI) بسیار موثر است.</p>"
-    }
-  },
-  "auto_start": {
-    "en": {
-      "title": "Auto Start",
-      "body": "<p>When enabled, the application will automatically launch in the background when you turn on your computer.</p>"
-    },
-    "fa": {
-      "title": "اجرای خودکار",
-      "body": "<p>با فعال‌سازی این گزینه، نرم‌افزار به محض روشن شدن سیستم شما به صورت خودکار در پس‌زمینه اجرا خواهد شد.</p>"
-    }
-  },
-  "start_minimized": {
-    "en": {
-      "title": "Start Minimized",
-      "body": "<p>If Auto Start is on, enabling this will cause the app to launch silently into the system tray without popping up a window.</p>"
-    },
-    "fa": {
-      "title": "شروع در حالت پنهان",
-      "body": "<p>در صورت فعال بودن اجرای خودکار، این گزینه باعث می‌شود برنامه پس از روشن شدن سیستم، بدون باز کردن پنجره و به صورت خاموش در System Tray ویندوز قرار بگیرد.</p>"
-    }
-  },
-  "auto_update_subs": {
-    "en": {
-      "title": "Auto Update Subscriptions",
-      "body": "<p>When enabled, your subscriptions will be automatically refreshed in the background every few hours to ensure you always have active nodes.</p>"
-    },
-    "fa": {
-      "title": "بروزرسانی خودکار اشتراک‌ها",
-      "body": "<p>با فعال‌سازی این گزینه، لینک‌های اشتراک شما به صورت دوره‌ای و خودکار در پس‌زمینه بروزرسانی می‌شوند تا همیشه به سرورهای جدید و فعال دسترسی داشته باشید.</p>"
-    }
-  },
-  "auto_reconnect": {
-    "en": {
-      "title": "Auto Reconnect",
-      "body": "<p>If the connection drops or the app is restarted, it will automatically attempt to reconnect to your last active server and restore your previous connection mode (System Proxy or TUN).</p>"
-    },
-    "fa": {
-      "title": "اتصال مجدد خودکار",
-      "body": "<p>در صورتی که ارتباط قطع شود یا برنامه را ببندید و دوباره باز کنید، نرم‌افزار به طور خودکار به آخرین سروری که به آن متصل بودید وصل شده و حالت قبلی (پروکسی سیستم یا TUN) را بازیابی می‌کند.</p>"
-    }
-  },
-  "live_ping": {
-    "en": {
-      "title": "Live Ping",
-      "body": "<p>Enables real-time connection monitoring in the dashboard, showing your active ping and network health while connected.</p>"
-    },
-    "fa": {
-      "title": "پینگ زنده",
-      "body": "<p>این گزینه وضعیت اتصال و پینگ لحظه‌ای شما را به صورت زنده در داشبورد نرم‌افزار نمایش می‌دهد تا از کیفیت ارتباط خود مطلع باشید.</p>"
-    }
-  },
-  "routing": {
-    "en": {
-      "title": "Routing Rules",
-      "body": "<p><strong>Routing Rules</strong> determine how your network traffic is handled by the VPN.</p><br><p><strong>How to use Custom Rules:</strong></p><ol><li><strong>Domains & IPs:</strong> You can add specific domain names (e.g., <code>example.com</code>) or IP addresses (e.g., <code>192.168.1.0/24</code>) separated by commas.</li><li><strong>Proxy:</strong> Forces the specified websites to go through your VPN server.</li><li><strong>Bypass (Direct):</strong> Sends the traffic directly through your normal internet provider, completely bypassing the VPN. Highly recommended for local banking apps or online games.</li><li><strong>Block:</strong> Completely blocks access to the entered domains or IPs, which is useful for blocking trackers or malware.</li></ol>"
-    },
-    "fa": {
-      "title": "قوانین مسیریابی (Routing)",
-      "body": "<p><strong>قوانین مسیریابی</strong> تعیین می‌کنند که ترافیک اینترنت شما چگونه توسط برنامه مدیریت شود.</p><br><p><strong>آموزش استفاده از قوانین شخصی (Custom Rules):</strong></p><ol><li><strong>دامنه‌ها و آی‌پی‌ها:</strong> شما می‌توانید آدرس سایت‌ها (مانند <code>example.com</code>) یا آدرس‌های IP (مانند <code>192.168.1.0/24</code>) را با کاما (,) از هم جدا کرده و وارد کنید.</li><li><strong>پروکسی (Proxy):</strong> ترافیک سایت‌های وارد شده را مجبور می‌کند تا حتماً از سرور فیلترشکن شما عبور کنند.</li><li><strong>عبور (Bypass):</strong> ترافیک را به طور کامل از فیلترشکن خارج کرده و از اینترنت عادی شما عبور می‌دهد. این حالت برای باز کردن سایت‌های بانک‌های ایرانی یا کاهش پینگ در بازی‌های آنلاین بسیار کاربردی است.</li><li><strong>مسدود کردن (Block):</strong> دسترسی به سایت‌ها یا آی‌پی‌های وارد شده را کاملاً قطع می‌کند. از این گزینه می‌توانید برای مسدودسازی تبلیغات یا بدافزارها استفاده کنید.</li></ol>"
-    }
-  },
-  "subscriptions": {
-    "en": {
-      "title": "Subscriptions",
-      "body": "<p><strong>Subscriptions</strong> are links provided by your VPN provider that contain a list of servers.</p><p><strong>Auto-Update:</strong> You can edit a subscription to set an auto-update timer (e.g., every 12 hours) to always keep it fresh.</p><p><strong>Statistics:</strong> Click on the statistics row of a subscription (delay/traffic) to view detailed charts showing your usage, average ping, and remaining subscription days.</p>"
-    },
-    "fa": {
-      "title": "اشتراک‌ها (Subscriptions)",
-      "body": "<p><strong>اشتراک‌ها</strong> لینک‌هایی هستند که توسط ارائه‌دهنده سرویس به شما داده می‌شوند و شامل لیستی از سرورها هستند.</p><p><strong>بروزرسانی خودکار:</strong> با ویرایش یک اشتراک می‌توانید برای آن تایمر تعیین کنید (مثلاً هر 12 ساعت) تا سرورها به صورت خودکار بروز شوند.</p><p><strong>آمار مصرف:</strong> با کلیک روی بخش آمار اشتراک (آیکون‌های ترافیک و پینگ)، می‌توانید نمودار مصرف حجم، میانگین پینگ و روزهای باقیمانده از اشتراک خود را با جزئیات کامل مشاهده کنید.</p>"
-    }
-  },
-  "bypass_iran": {
-    "en": {
-      "title": "Bypass Iran Sites",
-      "body": "<p>When enabled, all traffic to Iranian websites and IP ranges goes through your direct connection instead of the VPN.</p><p>This is extremely helpful for local banking apps and domestic websites that require a direct connection, greatly improving loading speeds.</p>"
-    },
-    "fa": {
-      "title": "دور زدن سایت‌های ایرانی",
-      "body": "<p>با فعال‌سازی این گزینه، تمامی ترافیک به سمت سایت‌ها و دامنه‌های ایرانی مستقیماً از اینترنت اصلی شما (بدون عبور از فیلترشکن) ارسال می‌شود.</p><p>این ویژگی برای استفاده همزمان از اپلیکیشن‌های بانکی و سایت‌های داخلی بسیار مفید است و سرعت باز شدن آن‌ها را به شدت افزایش می‌دهد.</p>"
-    }
-  },
-  "bypass_lan": {
-    "en": {
-      "title": "Bypass LAN",
-      "body": "<p>When enabled, traffic directed to your Local Area Network addresses (like 192.168.x.x) will bypass the VPN tunnel.</p><p>This allows you to still access your home smart devices, printers, or local servers while keeping the VPN active.</p>"
-    },
-    "fa": {
-      "title": "دور زدن شبکه محلی (LAN)",
-      "body": "<p>با فعال کردن این گزینه، ارتباط شما با دستگاه‌های شبکه داخلی (آی‌پی‌های مانند 192.168.x.x) از فیلترشکن عبور نمی‌کند.</p><p>این به شما اجازه می‌دهد تا در حین اتصال به فیلترشکن، همچنان بتوانید به مودم، پرینترها یا دستگاه‌های هوشمند خانگی خود دسترسی داشته باشید.</p>"
-    }
-  },
-  "block_ads": {
-    "en": {
-      "title": "Block Ads",
-      "body": "<p>When enabled, commonly known advertising and tracking domains are blocked completely. This provides basic network-level ad filtering, speeds up page loads, and protects your privacy.</p>"
-    },
-    "fa": {
-      "title": "مسدودسازی تبلیغات",
-      "body": "<p>با انتخاب این گزینه، دامنه‌های معروف تبلیغاتی و ردیاب‌ها به طور کامل در سطح شبکه مسدود می‌شوند. این ویژگی باعث افزایش سرعت بارگذاری صفحات وب شده و از حریم خصوصی شما محافظت می‌کند.</p>"
-    }
-  },
-  "strict_route": {
-    "en": {
-      "title": "Strict Route",
-      "body": "<p>When enabled in TUN mode, strict route ensures that ALL system traffic is forcibly captured by the VPN tunnel, preventing any application from intentionally bypassing the tunnel and leaking your IP.</p>"
-    },
-    "fa": {
-      "title": "مسیریابی سخت‌گیرانه (Strict Route)",
-      "body": "<p>وقتی در حالت TUN متصل هستید، این گزینه سیستم را مجبور می‌کند تا ۱۰۰٪ ترافیک تمامی برنامه‌ها را به داخل تونل فیلترشکن هدایت کند و جلوی نشت آی‌پی (IP Leak) یا فرار برنامه‌ها از فیلترشکن را به طور کامل می‌گیرد.</p>"
-    }
-  },
-  "remote_dns": {
-    "en": {
-      "title": "Remote Secure DNS",
-      "body": "<p>This is the DNS server used to resolve domain names inside the VPN tunnel (e.g., <code>https://1.1.1.1/dns-query</code>). It encrypts your queries via HTTPS to prevent your ISP from eavesdropping.</p>"
-    },
-    "fa": {
-      "title": "دی‌ان‌اس امن خارجی",
-      "body": "<p>این سرور وظیفه ترجمه آدرس سایت‌ها در داخل تونل فیلترشکن را بر عهده دارد (مثلاً <code>https://1.1.1.1/dns-query</code>). با رمزنگاری درخواست‌های شما، مانع از شنود و ردیابی سایت‌های بازدید شده توسط شرکت ارائه‌دهنده اینترنت شما می‌شود.</p>"
-    }
-  },
-  "local_dns": {
-    "en": {
-      "title": "Direct Local DNS",
-      "body": "<p>This DNS is used for traffic that bypasses the VPN directly. The default <code>local</code> uses your system's built-in DNS. You can change this to <code>8.8.8.8</code> or others if you want a specific resolver for bypassed traffic.</p>"
-    },
-    "fa": {
-      "title": "دی‌ان‌اس محلی",
-      "body": "<p>این سرور برای ترافیک‌هایی استفاده می‌شود که از فیلترشکن عبور نمی‌کنند (ترافیک‌های Bypass). مقدار پیش‌فرض <code>local</code> از دی‌ان‌اس خود ویندوز استفاده می‌کند. در صورت نیاز به یک دی‌ان‌اس خاص برای سایت‌های داخلی، می‌توانید آن را به مقادیری مثل <code>8.8.8.8</code> تغییر دهید.</p>"
-    }
-  },
-  "core_selection": {
-    "en": {
-      "title": "Core Selection",
-      "body": "<p>Vxray supports two proxy engines (cores):</p><p><strong>Auto</strong> – The app will automatically select the best core for the node.</p><p><strong>Sing-Box</strong> – A modern, highly-performant core that is the default choice.</p><p><strong>Xray</strong> – A mature core with extensive protocol support, kept for advanced setups like XHTTP.</p>"
-    },
-    "fa": {
-      "title": "انتخاب هسته (Core)",
-      "body": "<p>برنامه Vxray از دو موتور پردازشی قدرتمند پشتیبانی می‌کند:</p><p><strong>خودکار (Auto)</strong> – نرم‌افزار به صورت هوشمند بهترین هسته را بر اساس نوع سرور شما انتخاب می‌کند.</p><p><strong>Sing-Box</strong> – یک هسته مدرن و فوق‌العاده سریع که انتخاب اصلی سیستم است.</p><p><strong>Xray</strong> – یک هسته باسابقه با پشتیبانی گسترده از پروتکل‌ها، ایده‌آل برای پیکربندی‌های پیشرفته مانند XHTTP.</p>"
-    }
-  }
-};;
+const helpContent = HELP_CONTENT;
 
 function showHelp(topic) {
   _helpCurrentTopic = topic;
   const content = helpContent[topic];
   if (!content) return;
-  
+
+  _helpCurrentLang = getCurrentLang();
+
   const modal = document.getElementById('help-modal');
   modal.style.display = 'flex';
-  
+
   renderHelpContent(content, _helpCurrentLang);
   
   // Update lang buttons
@@ -4105,7 +5654,7 @@ function switchHelpLang(lang) {
 function renderHelpContent(content, lang) {
   const body = document.getElementById('help-modal-body');
   const data = content[lang] || content['en'];
-  const isRTL = lang === 'fa';
+  const isRTL = lang === 'fa' || lang === 'ar';
   
   body.innerHTML = `
     <div class="${isRTL ? 'help-rtl' : ''}">
@@ -4147,13 +5696,16 @@ window.closeHelp = closeHelp;
 
 let stActive = false;
 let stAbortController = null;
+// Bumped at the start of every run, so the retire-UI timer chain in `finally` can tell its own
+// run from a later one that has already re-shown the gauge.
+let stUiGeneration = 0;
 
 async function startSpeedTest() {
   const btnGo = document.getElementById('st-btn-go-large');
   const btnStop = document.getElementById('st-btn-stop');
   const gaugeArea = document.getElementById('st-gauge-area');
   const resultsArea = document.getElementById('st-results');
-  
+
   if (stActive) {
     if (stAbortController) {
       stAbortController.abort();
@@ -4163,6 +5715,7 @@ async function startSpeedTest() {
   }
   
   stActive = true;
+  stUiGeneration++;
   stAbortController = new AbortController();
   const signal = stAbortController.signal;
   
@@ -4188,12 +5741,22 @@ async function startSpeedTest() {
   // Cloudflare endpoints
   let dlUrl = 'https://speed.cloudflare.com/__down?bytes=500000000'; // 500MB to guarantee 5s on Gigabit
   let ulUrl = 'https://speed.cloudflare.com/__up';
-  let pingUrl = 'https://cloudflare.com/cdn-cgi/trace'; // Ultra-lightweight endpoint for accurate HTTP ping
-  
+
+  // A domestic endpoint for the not-yet-connected ping. Measuring latency against a
+  // host inside Iran is what makes the number read as a local RTT; the previous
+  // google.com/generate_204 probe also tripped CORS from the webview and reported
+  // "Error". no-cors sidesteps that -- we only need the round trip, not the body.
+  const irPingUrl = 'https://www.aparat.com/favicon.ico';
+
+  async function iranPing(signal) {
+    const t0 = performance.now();
+    await fetch(`${irPingUrl}?_=${Date.now()}`, { cache: 'no-store', mode: 'no-cors', signal });
+    return Math.round(performance.now() - t0);
+  }
+
   try {
-    const startPing = performance.now();
     let pingMs;
-    
+
     if (isRunning && connectedServerLink) {
         try {
             const rawLat = await invoke('get_live_ping', { link: connectedServerLink });
@@ -4202,11 +5765,12 @@ async function startSpeedTest() {
             pingMs = 'Error';
         }
     } else {
-        // Direct local network ping (simulating the app's ping system but without the proxy)
+        // Not connected: measure the round trip to a domestic Iranian host so the
+        // reading reflects the local network rather than an overseas CDN.
         try {
-            await fetch(`https://www.google.com/generate_204?nocache=${Date.now()}`, { cache: 'no-store', signal });
-            pingMs = Math.round(performance.now() - startPing);
-        } catch (_) {
+            pingMs = await iranPing(signal);
+        } catch (e) {
+            if (e.name === 'AbortError') throw e;
             pingMs = 'Error';
         }
     }
@@ -4285,28 +5849,36 @@ async function startSpeedTest() {
     });
   } catch (e) {
     if (e.name === 'AbortError' || e.message === 'Aborted') {
-      log('Speed test stopped by user.');
+      log(t('log.stopped_by_user'));
     } else {
-      log('Speed test failed: ' + e);
+      log(t('log.speedtest_failed', null, {err: e}));
     }
     setGauge(0);
   } finally {
     stActive = false;
     stAbortController = null;
-    
+
     // Reset gauge to zero visually
     setGauge(0);
     document.getElementById('st-speed-value').textContent = '0.00';
-    
-    // Transition UI back to GO button
+
+    // A run that ended while another is starting must not retire its UI. The timers below hold
+    // direct references to the shared gauge and buttons, so firing mid-run hides the gauge and
+    // re-shows GO while the new test is still measuring, and nothing in the new run repaints
+    // them. A generation count makes the chain a no-op for any run but its own; the GO click
+    // that starts a new one bumps it first.
+    const myGeneration = stUiGeneration;
     setTimeout(() => {
+        if (myGeneration !== stUiGeneration) return;
         gaugeArea.style.opacity = '0';
         btnStop.style.display = 'none';
-        
+
         setTimeout(() => {
+            if (myGeneration !== stUiGeneration) return;
             gaugeArea.style.display = 'none';
             btnGo.style.display = 'block';
             setTimeout(() => {
+                if (myGeneration !== stUiGeneration) return;
                 btnGo.style.opacity = '1';
                 btnGo.style.pointerEvents = 'auto';
             }, 50);

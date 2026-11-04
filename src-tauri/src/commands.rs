@@ -114,7 +114,8 @@ pub fn get_routing_settings(
     Ok(json!({
         "bypass_iran": s.settings.bypass_iran,
         "bypass_lan": s.settings.bypass_lan,
-        "block_ads": s.settings.block_ads
+        "block_ads": s.settings.block_ads,
+        "proxy_only_mode": s.settings.proxy_only_mode
     }))
 }
 
@@ -122,22 +123,31 @@ pub fn get_routing_settings(
 pub fn add_routing_rule(
     rule: crate::core::settings::RoutingRule,
     settings: tauri::State<std::sync::Mutex<crate::core::settings::SettingsManager>>,
-) -> Result<(), String> {
-    let mut s = settings.lock().unwrap();
-    s.settings.routing_rules.push(rule);
-    let _ = s.save();
-    Ok(())
+    core: tauri::State<std::sync::Mutex<crate::core::manager::CoreManager>>,
+) -> Result<bool, String> {
+    let is_process_rule = rule.kind == "process";
+    {
+        let mut s = settings.lock().unwrap();
+        s.settings.routing_rules.push(rule);
+        let _ = s.save();
+    }
+    smart_routing_restart(is_process_rule, &settings, &core)
 }
 
 #[tauri::command]
 pub fn delete_routing_rule(
     id: String,
     settings: tauri::State<std::sync::Mutex<crate::core::settings::SettingsManager>>,
-) -> Result<(), String> {
-    let mut s = settings.lock().unwrap();
-    s.settings.routing_rules.retain(|r| r.id != id);
-    let _ = s.save();
-    Ok(())
+    core: tauri::State<std::sync::Mutex<crate::core::manager::CoreManager>>,
+) -> Result<bool, String> {
+    let is_process_rule;
+    {
+        let mut s = settings.lock().unwrap();
+        is_process_rule = s.settings.routing_rules.iter().any(|r| r.id == id && r.kind == "process");
+        s.settings.routing_rules.retain(|r| r.id != id);
+        let _ = s.save();
+    }
+    smart_routing_restart(is_process_rule, &settings, &core)
 }
 
 #[tauri::command]
@@ -145,13 +155,107 @@ pub fn toggle_routing_rule(
     id: String,
     enabled: bool,
     settings: tauri::State<std::sync::Mutex<crate::core::settings::SettingsManager>>,
-) -> Result<(), String> {
-    let mut s = settings.lock().unwrap();
-    if let Some(rule) = s.settings.routing_rules.iter_mut().find(|r| r.id == id) {
-        rule.enabled = enabled;
-        let _ = s.save();
+    core: tauri::State<std::sync::Mutex<crate::core::manager::CoreManager>>,
+) -> Result<bool, String> {
+    let is_process_rule;
+    {
+        let mut s = settings.lock().unwrap();
+        is_process_rule = s.settings.routing_rules.iter().any(|r| r.id == id && r.kind == "process");
+        if let Some(rule) = s.settings.routing_rules.iter_mut().find(|r| r.id == id) {
+            rule.enabled = enabled;
+            let _ = s.save();
+        }
     }
-    Ok(())
+    smart_routing_restart(is_process_rule, &settings, &core)
+}
+
+/// Restarts only the main core (fast) for domain rule changes, or signals the
+/// frontend to do a full reconnect (including TUN adapter) for process rule changes.
+/// Returns Ok(true) when the backend handled the restart itself, Ok(false) when
+/// the frontend should trigger its own restartConnectionIfActive().
+fn smart_routing_restart(
+    is_process_rule: bool,
+    settings: &tauri::State<std::sync::Mutex<crate::core::settings::SettingsManager>>,
+    core: &tauri::State<std::sync::Mutex<crate::core::manager::CoreManager>>,
+) -> Result<bool, String> {
+    let (link, tun_mode) = {
+        let s = settings.lock().unwrap();
+        let link = s.settings.ui.last_connection_link.clone().unwrap_or_default();
+        let tun_mode = s.settings.ui.tun_enabled;
+        (link, tun_mode)
+    };
+    let (alive, _tun_running) = {
+        let mut c = core.lock().unwrap();
+        (c.is_alive(), c.is_tun_alive())
+    };
+
+    if !alive || link.is_empty() {
+        return Ok(false); // nothing running, frontend can skip restart too
+    }
+
+    // Process rule changes require a TUN adapter restart (the sidecar needs new
+    // process_name rules). Tell the frontend to do a full reconnect.
+    if is_process_rule {
+        return Ok(false); // frontend will call restartConnectionIfActive()
+    }
+
+    // Domain-only change: regenerate and restart ONLY the main core.
+    // The TUN sidecar stays up -- it connects to the main core via SOCKS on port
+    // 2080, so new connections will use the updated routing as soon as the core
+    // is back.  This avoids the multi-second Wintun adapter teardown/setup.
+    let port: u16 = 2080;
+    let (config, _exact_ip, is_xray) = {
+        let s = settings.lock().unwrap();
+        crate::core::config::generate_config(&link, port, Some(&s.settings), tun_mode)?
+    };
+
+    // Kill old core, wait for port release
+    {
+        let mut c = core.lock().unwrap();
+        if let Some(mut p) = c.take_core_process() {
+            let _ = p.kill();
+            let _ = p.wait();
+        }
+    }
+    std::thread::sleep(std::time::Duration::from_millis(20));
+
+    // Start new core with updated config
+    {
+        let mut c = core.lock().unwrap();
+        c.start_core(config)?;
+
+        // If xray, make sure tracker is still running
+        if is_xray && !c.is_tracker_running() {
+            let tracker_config = serde_json::json!({
+                "log": { "level": "fatal" },
+                "experimental": {
+                    "clash_api": {
+                        "external_controller": "127.0.0.1:9090"
+                    }
+                },
+                "inbounds": [{
+                    "type": "mixed",
+                    "tag": "mixed-in",
+                    "listen": "127.0.0.1",
+                    "listen_port": port,
+                    "sniff": true,
+                    "sniff_override_destination": true
+                }],
+                "outbounds": [{
+                    "type": "socks",
+                    "tag": "proxy",
+                    "server": "127.0.0.1",
+                    "server_port": port + 1,
+                    "version": "5"
+                }],
+                "route": {
+                    "final": "proxy"
+                }
+            });
+            let _ = c.start_tracker_core(tracker_config);
+        }
+    }
+    Ok(true) // backend handled it, frontend should NOT do full reconnect
 }
 
 #[tauri::command]
@@ -159,16 +263,29 @@ pub fn update_routing_preset(
     preset: String,
     enabled: bool,
     settings: tauri::State<std::sync::Mutex<crate::core::settings::SettingsManager>>,
-) -> Result<(), String> {
-    let mut s = settings.lock().unwrap();
-    match preset.as_str() {
-        "bypass_iran" => s.settings.bypass_iran = enabled,
-        "bypass_lan" => s.settings.bypass_lan = enabled,
-        "block_ads" => s.settings.block_ads = enabled,
-        _ => {}
+    core: tauri::State<std::sync::Mutex<crate::core::manager::CoreManager>>,
+) -> Result<bool, String> {
+    {
+        let mut s = settings.lock().unwrap();
+        match preset.as_str() {
+            "bypass_iran" => s.settings.bypass_iran = enabled,
+            "bypass_lan" => s.settings.bypass_lan = enabled,
+            "block_ads" => s.settings.block_ads = enabled,
+            "proxy_only_mode" => s.settings.proxy_only_mode = enabled,
+            _ => {}
+        }
+        let _ = s.save();
     }
-    let _ = s.save();
-    Ok(())
+
+    if preset == "proxy_only_mode" {
+        // Toggling proxy_only_mode flips TUN default between direct and proxy;
+        // requires full adapter restart. Return false so frontend handles it.
+        Ok(false)
+    } else {
+        // bypass_iran, bypass_lan, block_ads are domain/IP presets:
+        // fast restart the core only, no virtual adapter kill!
+        smart_routing_restart(false, &settings, &core)
+    }
 }
 
 #[tauri::command]
@@ -176,12 +293,15 @@ pub fn update_dns_settings(
     remote: String,
     local: String,
     settings: tauri::State<std::sync::Mutex<crate::core::settings::SettingsManager>>,
-) -> Result<(), String> {
-    let mut s = settings.lock().unwrap();
-    s.settings.remote_dns = remote;
-    s.settings.local_dns = local;
-    let _ = s.save();
-    Ok(())
+    core: tauri::State<std::sync::Mutex<crate::core::manager::CoreManager>>,
+) -> Result<bool, String> {
+    {
+        let mut s = settings.lock().unwrap();
+        s.settings.remote_dns = remote;
+        s.settings.local_dns = local;
+        let _ = s.save();
+    }
+    smart_routing_restart(false, &settings, &core)
 }
 
 #[tauri::command]
@@ -212,6 +332,7 @@ use crate::core::settings::SettingsManager;
 use reqwest::Client;
 use serde_json::json;
 use serde_json::Value;
+#[cfg(windows)]
 use std::os::windows::ffi::OsStrExt;
 use std::sync::Mutex;
 use std::time::Duration;
@@ -776,6 +897,7 @@ pub async fn update_subscription(
     Ok(())
 }
 
+#[cfg(target_os = "windows")]
 fn get_default_gateway() -> Option<String> {
     use std::os::windows::process::CommandExt;
     const CREATE_NO_WINDOW: u32 = 0x08000000;
@@ -798,6 +920,11 @@ fn get_default_gateway() -> Option<String> {
     None
 }
 
+#[cfg(not(target_os = "windows"))]
+fn get_default_gateway() -> Option<String> {
+    None
+}
+
 #[tauri::command]
 pub async fn connect(
     link: String,
@@ -808,7 +935,7 @@ pub async fn connect(
     let port = 2080;
     let (config, exact_ip, is_xray, strict_route, remote_dns, local_dns, settings_clone) = {
         let s = settings.lock().unwrap();
-        let (cfg, ip, xray) = crate::core::config::generate_config(&link, port, Some(&s.settings))?;
+        let (cfg, ip, xray) = crate::core::config::generate_config(&link, port, Some(&s.settings), tun_mode)?;
         (cfg, ip, xray, s.settings.strict_route, s.settings.remote_dns.clone(), s.settings.local_dns.clone(), s.settings.clone())
     };
 
@@ -829,31 +956,27 @@ pub async fn connect(
         
         if tun_mode {
             c.clear_system_proxy();
-            use std::os::windows::process::CommandExt;
-            const CREATE_NO_WINDOW: u32 = 0x08000000;
-            if c.get_tun_enabled() { // If tun is already running
-                // Keep it alive, manage routes dynamically
-                if let (Some(gw), Some(new_ip)) = (get_default_gateway(), &exact_ip) {
-                    if let Some(old) = old_ip {
-                        let _ = std::process::Command::new("route").creation_flags(CREATE_NO_WINDOW).args(&["delete", &old]).output();
-                    }
-                    let _ = std::process::Command::new("route").creation_flags(CREATE_NO_WINDOW).args(&["add", new_ip, "mask", "255.255.255.255", &gw]).output();
+            old_tun = c.take_tun_process();
+            start_new_tun = true;
+            #[cfg(target_os = "windows")]
+            if let (Some(gw), Some(new_ip)) = (get_default_gateway(), &exact_ip) {
+                use std::os::windows::process::CommandExt;
+                const CREATE_NO_WINDOW: u32 = 0x08000000;
+                if let Some(old) = old_ip {
+                    let _ = std::process::Command::new("route").creation_flags(CREATE_NO_WINDOW).args(&["delete", &old]).output();
                 }
-            } else {
-                old_tun = c.take_tun_process();
-                start_new_tun = true;
-                // Add route for new TUN
-                if let (Some(gw), Some(new_ip)) = (get_default_gateway(), &exact_ip) {
-                    let _ = std::process::Command::new("route").creation_flags(CREATE_NO_WINDOW).args(&["add", new_ip, "mask", "255.255.255.255", &gw]).output();
-                }
+                let _ = std::process::Command::new("route").creation_flags(CREATE_NO_WINDOW).args(&["add", new_ip, "mask", "255.255.255.255", &gw]).output();
             }
         } else {
             old_tun = c.take_tun_process();
+            #[cfg(target_os = "windows")]
             // Delete old route if we are disabling TUN
-            use std::os::windows::process::CommandExt;
-            const CREATE_NO_WINDOW: u32 = 0x08000000;
-            if let Some(old) = old_ip {
-                let _ = std::process::Command::new("route").creation_flags(CREATE_NO_WINDOW).args(&["delete", &old]).output();
+            {
+                use std::os::windows::process::CommandExt;
+                const CREATE_NO_WINDOW: u32 = 0x08000000;
+                if let Some(old) = old_ip {
+                    let _ = std::process::Command::new("route").creation_flags(CREATE_NO_WINDOW).args(&["delete", &old]).output();
+                }
             }
         }
     }
@@ -1119,7 +1242,7 @@ pub async fn check_ip(use_proxy: bool) -> Result<serde_json::Value, String> {
 
     // Final fallback just to check internet connectivity
     if client
-        .get("https://www.google.com/generate_204")
+        .get("https://cp.cloudflare.com/generate_204")
         .send()
         .await
         .is_ok()
@@ -1143,7 +1266,9 @@ async fn do_single_ping(
     if CANCEL_TESTS.load(std::sync::atomic::Ordering::SeqCst) {
         return -1;
     }
+    #[cfg(windows)]
     use std::os::windows::process::CommandExt;
+    #[cfg(windows)]
     const CREATE_NO_WINDOW: u32 = 0x08000000;
 
     let mut port = PING_PORT.fetch_add(2, std::sync::atomic::Ordering::SeqCst);
@@ -1153,10 +1278,12 @@ async fn do_single_ping(
     }
     let mut config = crate::core::config::generate_single_test_config(&link, port);
     
-    let mut exe_name = "sing-box.exe";
+    let sb_name = format!("sing-box{}", crate::core::manager::EXE_EXT);
+    let xr_name = format!("xray{}", crate::core::manager::EXE_EXT);
+    let mut exe_name = sb_name.as_str();
     if let Some(core_type) = config.get("__core__").and_then(|v| v.as_str()) {
         if core_type == "xray" {
-            exe_name = "xray.exe";
+            exe_name = xr_name.as_str();
         }
     }
     if let Some(obj) = config.as_object_mut() {
@@ -1171,6 +1298,9 @@ async fn do_single_ping(
         }
     }
     
+    if !data_dir.exists() {
+        let _ = std::fs::create_dir_all(&data_dir);
+    }
     let config_path = data_dir.join(format!("test_config_{}.json", port));
     let _cleanup = FileCleanup(config_path.clone());
     let _ = std::fs::write(&config_path, config.to_string());
@@ -1178,11 +1308,12 @@ async fn do_single_ping(
 
     let exe_path = bin_dir.join(exe_name);
     
-    let child_res = std::process::Command::new(&exe_path)
-        .current_dir(&bin_dir)
-        .args(["run", "-c", &config_path.to_string_lossy()])
-        .creation_flags(CREATE_NO_WINDOW)
-        .spawn();
+    let mut ping_cmd = std::process::Command::new(&exe_path);
+    ping_cmd.current_dir(&bin_dir)
+        .args(["run", "-c", &config_path.to_string_lossy()]);
+    #[cfg(windows)]
+    ping_cmd.creation_flags(CREATE_NO_WINDOW);
+    let child_res = ping_cmd.spawn();
 
     let mut latency = -1;
     if let Ok(mut child) = child_res {
@@ -1219,16 +1350,19 @@ pub async fn test_all_latency(
         (c.bin_dir.clone(), c.data_dir.clone())
     };
 
+    let force_xray = {
+        let s = settings.lock().unwrap();
+        s.settings.core_choice == "xray"
+    };
+
     let mut sb_links = vec![];
     let mut xray_links = vec![];
 
     for link in links {
-        let mut is_xray = false;
-        if let Some(parsed) = crate::core::config::parse_link(&link) {
-            if let Some(transport) = parsed.get("transport") {
-                let t_type = transport.get("type").and_then(|t| t.as_str()).unwrap_or("");
-                let h_type = transport.get("header_type").and_then(|h| h.as_str()).unwrap_or("");
-                if t_type == "xhttp" || h_type == "http" {
+        let mut is_xray = force_xray;
+        if !is_xray {
+            if let Some(parsed) = crate::core::config::parse_link(&link) {
+                if crate::core::config::link_transport_requires_xray(&parsed) {
                     is_xray = true;
                 }
             }
@@ -1441,7 +1575,7 @@ async fn real_delay_ping(port: u16, reuse: bool) -> i64 {
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap()
         .as_millis();
-    let url = format!("https://www.google.com/generate_204?nocache={}", ts);
+    let url = format!("https://cp.cloudflare.com/generate_204?nocache={}", ts);
 
     let mut attempts = if reuse { 1 } else { 2 };
     let mut one_time = Vec::new();
@@ -1608,13 +1742,16 @@ pub async fn switch_tun_mode(
     core: tauri::State<'_, std::sync::Mutex<crate::core::manager::CoreManager>>,
     settings: tauri::State<'_, std::sync::Mutex<SettingsManager>>,
 ) -> Result<(), String> {
-    let (is_xray, strict_route, remote_dns, local_dns, settings_clone) = {
+    let (new_config, exact_ip, is_xray, strict_route, remote_dns, local_dns, settings_clone) = {
         let s = settings.lock().unwrap();
-        let (_, _, is_xray) = crate::core::config::generate_config(&link, 2080, Some(&s.settings)).unwrap_or((serde_json::Value::Null, None, false));
-        (is_xray, s.settings.strict_route, s.settings.remote_dns.clone(), s.settings.local_dns.clone(), s.settings.clone())
+        let (cfg, ip, xray) = crate::core::config::generate_config(&link, 2080, Some(&s.settings), tunMode)
+            .map_err(|e| e.to_string())?;
+        (cfg, ip, xray, s.settings.strict_route, s.settings.remote_dns.clone(), s.settings.local_dns.clone(), s.settings.clone())
     };
 
-    let (mut old_tracker, mut old_tun, current_server_ip) = {
+    let needs_core_restart = settings_clone.proxy_only_mode;
+
+    let (mut old_tracker, mut old_tun, old_core, current_server_ip) = {
         let mut c = core.lock().unwrap();
         if !c.is_alive() {
             return Ok(());
@@ -1623,12 +1760,42 @@ pub async fn switch_tun_mode(
         let ip = c.current_server_ip.clone();
         if tunMode {
             c.clear_system_proxy();
+            #[cfg(target_os = "windows")]
+            if let (Some(gw), Some(new_ip)) = (get_default_gateway(), &exact_ip) {
+                use std::os::windows::process::CommandExt;
+                const CREATE_NO_WINDOW: u32 = 0x08000000;
+                if let Some(old) = &ip {
+                    let _ = std::process::Command::new("route").creation_flags(CREATE_NO_WINDOW).args(&["delete", old]).output();
+                }
+                let _ = std::process::Command::new("route").creation_flags(CREATE_NO_WINDOW).args(&["add", new_ip, "mask", "255.255.255.255", &gw]).output();
+            }
+        } else {
+            #[cfg(target_os = "windows")]
+            {
+                use std::os::windows::process::CommandExt;
+                const CREATE_NO_WINDOW: u32 = 0x08000000;
+                if let Some(old) = &ip {
+                    let _ = std::process::Command::new("route").creation_flags(CREATE_NO_WINDOW).args(&["delete", old]).output();
+                }
+            }
         }
-        (None::<std::process::Child>, c.take_tun_process(), ip)
+
+        let old_core = if needs_core_restart {
+            c.take_core_process()
+        } else {
+            None
+        };
+
+        (None::<std::process::Child>, c.take_tun_process(), old_core, ip)
     };
 
-    // Await tracker termination to free up ports, but detach TUN teardown to prevent UI freezing
+    // Await core/tracker termination to free up ports, but detach TUN teardown to prevent UI freezing
     let _ = tokio::task::spawn_blocking(move || {
+        if let Some(mut p) = old_core {
+            let _ = p.kill();
+            let _ = p.wait();
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
         if let Some(mut p) = old_tracker {
             let _ = p.kill();
             let _ = p.wait();
@@ -1645,6 +1812,9 @@ pub async fn switch_tun_mode(
     .await;
 
     let mut c = core.lock().unwrap();
+    if needs_core_restart {
+        c.start_core(new_config)?;
+    }
     if is_xray {
         if !c.is_tracker_running() {
             let tracker_config = serde_json::json!({
@@ -1713,11 +1883,20 @@ pub fn restart_as_admin(core: tauri::State<'_, std::sync::Mutex<crate::core::man
     // Spawn ourselves with a special flag to act as an invisible elevator process.
     // We use CREATE_BREAKAWAY_FROM_JOB (0x01000000) so this background process isn't
     // killed instantly when the parent's Job Object closes.
-    use std::os::windows::process::CommandExt;
-    let _ = std::process::Command::new(exe)
-        .arg("--elevator")
-        .creation_flags(0x01000000)
-        .spawn();
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt;
+        let _ = std::process::Command::new(exe)
+            .arg("--elevator")
+            .creation_flags(0x01000000)
+            .spawn();
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = std::process::Command::new("pkexec")
+            .arg(exe)
+            .spawn();
+    }
 
     std::process::exit(0);
 }
@@ -1746,7 +1925,7 @@ pub fn clear_data(settings: tauri::State<std::sync::Mutex<SettingsManager>>) -> 
 pub fn is_tracker_running(
     core: tauri::State<std::sync::Mutex<crate::core::manager::CoreManager>>,
 ) -> bool {
-    let c = core.lock().unwrap();
+    let mut c = core.lock().unwrap();
     c.is_tracker_running()
 }
 
@@ -1849,3 +2028,137 @@ pub fn clear_manual_servers(
 
 
 
+
+
+// ===== Extra Utilities for UI & Settings =====
+
+#[tauri::command]
+pub fn get_dns_settings(
+    settings: tauri::State<std::sync::Mutex<crate::core::settings::SettingsManager>>,
+) -> Result<serde_json::Value, String> {
+    let s = settings.lock().unwrap();
+    Ok(serde_json::json!({
+        "remote_dns": s.settings.remote_dns,
+        "local_dns": s.settings.local_dns
+    }))
+}
+
+#[tauri::command]
+pub async fn browse_executable() -> Result<Option<String>, String> {
+    tokio::task::spawn_blocking(crate::core::apps::pick_executable)
+        .await
+        .map_err(|e| format!("the file dialog stopped responding: {e}"))?
+}
+
+#[tauri::command]
+pub async fn detect_installed_apps() -> Result<Vec<crate::core::apps::DetectedApp>, String> {
+    tokio::task::spawn_blocking(crate::core::apps::detect_installed_apps)
+        .await
+        .map_err(|e| format!("application scan failed: {e}"))
+}
+
+#[tauri::command]
+pub fn cached_installed_apps() -> Vec<crate::core::apps::DetectedApp> {
+    crate::core::apps::cached_apps()
+}
+
+#[tauri::command]
+pub fn process_rule_status(
+    _link: String,
+    _settings: tauri::State<'_, std::sync::Mutex<crate::core::settings::SettingsManager>>,
+) -> Result<String, String> {
+    Ok(String::new())
+}
+
+#[tauri::command]
+pub fn xray_configs_to_links(text: String) -> Vec<String> {
+    let trimmed = text.trim();
+    if !trimmed.starts_with('[') {
+        return Vec::new();
+    }
+    match serde_json::from_str::<Vec<serde_json::Value>>(trimmed) {
+        Ok(arr) => arr
+            .iter()
+            .filter_map(|c| crate::core::config::xray_config_to_link(c))
+            .collect(),
+        Err(_) => Vec::new(),
+    }
+}
+
+#[tauri::command]
+pub fn get_language(
+    settings: tauri::State<'_, std::sync::Mutex<crate::core::settings::SettingsManager>>,
+) -> String {
+    let s = settings.lock().unwrap();
+    s.settings.ui.language.clone()
+}
+
+#[tauri::command]
+pub fn set_language(
+    lang: String,
+    settings: tauri::State<'_, std::sync::Mutex<crate::core::settings::SettingsManager>>,
+) -> Result<(), String> {
+    let mut s = settings.lock().unwrap();
+    s.settings.ui.language = lang;
+    let _ = s.save();
+    Ok(())
+}
+
+#[tauri::command]
+pub fn set_theme(
+    theme: String,
+    settings: tauri::State<'_, std::sync::Mutex<crate::core::settings::SettingsManager>>,
+) -> Result<(), String> {
+    let mut s = settings.lock().unwrap();
+    s.settings.ui.theme = theme;
+    let _ = s.save();
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn revive_tun() -> Result<bool, String> {
+    Ok(true)
+}
+
+#[tauri::command]
+pub async fn test_all_tcp_ping(
+    links: Vec<String>,
+) -> Result<std::collections::HashMap<String, Option<u64>>, String> {
+    use std::collections::HashMap;
+    use std::sync::Arc;
+    use tokio::sync::Semaphore;
+
+    let semaphore = Arc::new(Semaphore::new(20));
+    let mut tasks = Vec::new();
+
+    for link in links {
+        let sem = semaphore.clone();
+        tasks.push(tokio::spawn(async move {
+            let _permit = sem.acquire().await.ok();
+            let host_port = crate::core::config::extract_host_and_port(&link);
+            let result = if let Some((host, port)) = host_port {
+                let start = std::time::Instant::now();
+                match tokio::time::timeout(
+                    std::time::Duration::from_millis(1500),
+                    tokio::net::TcpStream::connect((host.as_str(), port)),
+                )
+                .await
+                {
+                    Ok(Ok(_)) => Some(start.elapsed().as_millis() as u64),
+                    _ => None,
+                }
+            } else {
+                None
+            };
+            (link, result)
+        }));
+    }
+
+    let mut results = HashMap::new();
+    for task in tasks {
+        if let Ok((link, ping)) = task.await {
+            results.insert(link, ping);
+        }
+    }
+    Ok(results)
+}

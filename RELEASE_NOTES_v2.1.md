@@ -37,7 +37,7 @@
 
 | Platform / Architecture | Package |
 | :--- | :--- |
-| **Windows 64-bit** | `Vxray_2.1_x64-setup.exe` |
-| **Windows 32-bit** | `Vxray_2.1_x32-setup.exe` |
-| **Linux 64-bit (Portable)** | `vxray_2.1_amd64.AppImage` |
-| **Linux 64-bit (Debian/Ubuntu)** | `vxray_2.1_amd64.deb` |
+| **Windows 64-bit** | `Vxray-2.1_x64-setup.exe` |
+| **Windows 32-bit** | `Vxray-2.1_x32-setup.exe` |
+| **Linux 64-bit (Portable)** | `Vxray_2.1_amd64.AppImage` |
+| **Linux 64-bit (Debian / Ubuntu)** | `Vxray_2.1_amd64.deb` |

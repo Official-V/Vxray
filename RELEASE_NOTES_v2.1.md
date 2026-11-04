@@ -2,10 +2,17 @@
 
 ### 🚀 What's New
 
-* **Per-App Routing for Executables (`.exe` Split Tunneling)**
-  * Full support for application-level process routing in TUN mode.
-  * You can now selectively route specific apps through the proxy (**Proxy-Only Mode**) or route everything and exclude specific apps (**Bypass Mode**).
-  * Toggling Proxy-Only mode or modifying `.exe` rules now instantly triggers a clean TUN adapter restart so process bindings take effect immediately.
+* **Dedicated Proxy-Only Mode (Strict Split Tunneling)**
+  * Added **Proxy-Only Mode** for TUN mode: when enabled, only the specific applications you choose (e.g. Telegram, Discord, Chrome, Steam) are routed through the proxy.
+  * All other applications, background services, Windows updates, and online games bypass the tunnel entirely and connect directly to your local internet.
+  * Ensures maximum connection speed, zero extra ping, and eliminates bandwidth waste from unneeded background traffic.
+  * Accurately reflects the exit proxy IP on the dashboard indicator exclusively for proxy-routed traffic.
+
+* **Per-App Routing & Process Management (`.exe` Rules)**
+  * Full application-level process routing for Windows executables.
+  * Select between **Proxy-Only Mode** (whitelist specific apps) or **Bypass Mode** (route everything and exclude selected apps).
+  * Automatically detects running processes or lets you pick any `.exe` binary from your disk.
+  * Toggling Proxy-Only mode or modifying `.exe` rules instantly triggers a clean TUN adapter restart so process bindings take effect immediately.
 
 * **Smart Routing Reload (Fast Reconnect)**
   * Changes to domain lists, DNS options, and routing presets (Bypass Iran, Bypass LAN, Block Ads) now reload the core configuration in milliseconds without dropping or recreating the virtual TUN adapter.

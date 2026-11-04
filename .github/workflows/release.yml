@@ -1,0 +1,86 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: 'Release tag (e.g. v2.1)'
+        required: true
+        default: 'v2.1'
+
+permissions:
+  contents: write
+
+jobs:
+  build-linux:
+    name: Build Linux (x64 AppImage & deb)
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Linux system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            build-essential \
+            curl \
+            wget \
+            file \
+            libssl-dev \
+            libgtk-3-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            patchelf
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install Node dependencies
+        run: npm ci || npm install
+
+      - name: Ensure Linux core binaries are present
+        run: |
+          mkdir -p bin-linux
+          if [ ! -f bin-linux/sing-box ]; then
+            echo "Fetching sing-box v1.14.4 for Linux amd64..."
+            curl -sL https://github.com/SagerNet/sing-box/releases/download/v1.14.4/sing-box-1.14.4-linux-amd64.tar.gz | tar -xz -C bin-linux --strip-components=1 sing-box-1.14.4-linux-amd64/sing-box
+            chmod +x bin-linux/sing-box
+          fi
+          if [ ! -f bin-linux/xray ]; then
+            echo "Fetching Xray v26.10.31 for Linux amd64..."
+            curl -sLo /tmp/xray.zip https://github.com/XTLS/Xray-core/releases/download/v26.10.31/Xray-linux-64.zip
+            unzip -q -o /tmp/xray.zip xray -d bin-linux
+            chmod +x bin-linux/xray
+            rm -f /tmp/xray.zip
+          fi
+          if [ ! -f bin-linux/geoip.dat ]; then
+            echo "Fetching geoip.dat..."
+            curl -sLo bin-linux/geoip.dat https://github.com/v2fly/geoip/releases/latest/download/geoip.dat
+          fi
+          if [ ! -f bin-linux/geosite.dat ]; then
+            echo "Fetching geosite.dat..."
+            curl -sLo bin-linux/geosite.dat https://github.com/v2fly/domain-list-community/releases/latest/download/dlc.dat
+          fi
+
+      - name: Build Linux AppImage and deb
+        run: node build-linux.js
+
+      - name: Upload Linux assets to GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.event.inputs.release_tag || github.ref_name }}
+          files: |
+            releases/*.AppImage
+            releases/*.deb
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -164,13 +164,11 @@ impl CoreManager {
         self.clear_system_proxy();
     }
 
+    #[cfg(not(target_os = "windows"))]
+    fn allow_firewall(_exe_path: &std::path::Path) {}
+
+    #[cfg(target_os = "windows")]
     fn allow_firewall(exe_path: &std::path::Path) {
-        #[cfg(not(target_os = "windows"))]
-        {
-            let _ = exe_path;
-            return;
-        }
-        #[cfg(target_os = "windows")]
         if !Self::is_admin() {
             return;
         }

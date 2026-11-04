@@ -488,18 +488,14 @@ async fn core_version(bin_dir: &std::path::Path, exe: &str) -> Option<String> {
         return None;
     }
 
-    let child = tokio::process::Command::new(&path)
-        .arg("version")
+    let mut cmd = tokio::process::Command::new(&path);
+    cmd.arg("version")
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::null())
-        .stdin(std::process::Stdio::null())
-        // These are console binaries launched from a windowed app; without this flag each one
-        // flashes a black console box in front of the user. This command runs the moment the
-        // Support tab opens, so it would flash two of them on every visit.
-        .creation_flags(0x0800_0000)
-        // wait_with_output takes the child, so on a timeout the handle is gone with it.
-        // Kill on drop is what turns a stalled `version` into a closed process instead of an
-        // orphan that keeps running after this function has given up on it.
+        .stdin(std::process::Stdio::null());
+    #[cfg(windows)]
+    cmd.creation_flags(0x0800_0000);
+    let child = cmd
         .kill_on_drop(true)
         .spawn()
         .ok()?;

@@ -1666,6 +1666,27 @@ pub fn set_auto_start(
     let mut s = settings.lock().unwrap();
     s.settings.ui.auto_start = enabled;
     let _ = s.save();
+
+    // Immediately update the standard user Run key so the change takes effect
+    // without waiting for the next app launch.
+    #[cfg(windows)]
+    {
+        if let Ok(hkcu) = winreg::RegKey::predef(winreg::enums::HKEY_CURRENT_USER)
+            .open_subkey_with_flags(
+                r"Software\Microsoft\Windows\CurrentVersion\Run",
+                winreg::enums::KEY_SET_VALUE,
+            )
+        {
+            if enabled {
+                let exe_path = std::env::current_exe().unwrap_or_default();
+                let exe_str = format!("\"{}\" --autostart", exe_path.to_string_lossy());
+                let _ = hkcu.set_value("Vxray", &exe_str);
+            } else {
+                let _ = hkcu.delete_value("Vxray");
+            }
+        }
+    }
+
     Ok(())
 }
 

@@ -1412,17 +1412,8 @@ async function toggleConnection() {
           await invoke('toggle_tun', { enabled: true });
         
         const overlay = document.createElement('div');
-        overlay.style.position = 'fixed';
-        overlay.style.top = '0'; overlay.style.left = '0';
-        overlay.style.width = '100vw'; overlay.style.height = '100vh';
-        overlay.style.backgroundColor = 'rgba(0,0,0,0.85)';
-        overlay.style.color = 'white';
-        overlay.style.display = 'flex';
-        overlay.style.alignItems = 'center';
-        overlay.style.justifyContent = 'center';
-        overlay.style.zIndex = '9999';
-        overlay.style.backdropFilter = 'blur(4px)';
-        overlay.innerHTML = `<div style="text-align:center; padding: 20px; border-radius: 12px; background: var(--bg-secondary);"><h3>${t('tun.admin_required')}</h3><p style="margin-top: 10px; color: var(--text-secondary);">${t('tun.admin_required_desc')}</p></div>`;
+        overlay.className = 'elevation-overlay';
+        overlay.innerHTML = `<div class="elevation-dialog"><h3>${t('tun.admin_required')}</h3><p>${t('tun.admin_required_desc')}</p></div>`;
         document.body.appendChild(overlay);
         
         // Same handover as the TUN toggle, with the same failure mode: the promise is fired on
@@ -2556,17 +2547,8 @@ async function handleTunToggle() {
         await invoke('toggle_tun', { enabled: true });
 
         const overlay = document.createElement('div');
-        overlay.style.position = 'fixed';
-        overlay.style.top = '0'; overlay.style.left = '0';
-        overlay.style.width = '100vw'; overlay.style.height = '100vh';
-        overlay.style.backgroundColor = 'rgba(0,0,0,0.85)';
-        overlay.style.color = 'white';
-        overlay.style.display = 'flex';
-        overlay.style.alignItems = 'center';
-        overlay.style.justifyContent = 'center';
-        overlay.style.zIndex = '9999';
-        overlay.style.backdropFilter = 'blur(4px)';
-        overlay.innerHTML = `<div style="text-align:center; padding: 20px; border-radius: 12px; background: var(--bg-secondary);"><h3>${t('tun.admin_required')}</h3><p style="margin-top: 10px; color: var(--text-secondary);">${t('tun.admin_required_desc')}</p></div>`;
+        overlay.className = 'elevation-overlay';
+        overlay.innerHTML = `<div class="elevation-dialog"><h3>${t('tun.admin_required')}</h3><p>${t('tun.admin_required_desc')}</p></div>`;
         document.body.appendChild(overlay);
 
         // The restart is fired on a timer rather than awaited, so a refused UAC or a backend

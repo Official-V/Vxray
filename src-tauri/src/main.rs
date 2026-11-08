@@ -110,11 +110,13 @@ fn main() {
     let settings_manager = SettingsManager::new();
 
     #[cfg(windows)]
-    // Sync autostart registry key on manual startup to repair any profile desyncs
+    // Sync autostart registry key on manual startup to repair any profile desyncs.
+    // Only touches the standard user Run key — no scheduled tasks, no HKLM writes.
     {
+        use std::os::windows::process::CommandExt;
+
         let is_autostart_launch = std::env::args().any(|arg| arg == "--autostart");
         if !is_autostart_launch {
-            let task_name = "VxrayAutoStart";
             if settings_manager.settings.ui.auto_start {
                 let exe_path = std::env::current_exe().unwrap_or_default();
                 let exe_str = format!("\"{}\" --autostart", exe_path.to_string_lossy());
@@ -126,13 +128,6 @@ fn main() {
                 {
                     let _ = hkcu.set_value("Vxray", &exe_str);
                 }
-                let _ = std::process::Command::new("schtasks")
-                    .args(&[
-                        "/Create", "/F", "/TN", task_name, "/TR", &exe_str, "/SC", "ONLOGON", "/RL",
-                        "HIGHEST",
-                    ])
-                    .creation_flags(0x08000000)
-                    .output();
             } else {
                 if let Ok(hkcu) = winreg::RegKey::predef(winreg::enums::HKEY_CURRENT_USER)
                     .open_subkey_with_flags(
@@ -142,11 +137,15 @@ fn main() {
                 {
                     let _ = hkcu.delete_value("Vxray");
                 }
-                let _ = std::process::Command::new("schtasks")
-                    .args(&["/Delete", "/F", "/TN", task_name])
-                    .creation_flags(0x08000000)
-                    .output();
             }
+
+            // One-time cleanup: remove the legacy VxrayAutoStart scheduled task if it
+            // still exists from an older version. This purges the aggressive TaskCache
+            // registry subkeys that antivirus engines flag.
+            let _ = std::process::Command::new("schtasks")
+                .args(&["/Delete", "/F", "/TN", "VxrayAutoStart"])
+                .creation_flags(0x08000000)
+                .output();
         }
     }
 
